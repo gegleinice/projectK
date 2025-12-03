@@ -1,0 +1,43 @@
+version: '1.0'
+name: ai-invoice-service
+
+# Dokploy 应用配置
+app:
+  name: ai-invoice-service
+  type: docker
+  
+  # 构建配置
+  build:
+    context: .
+    dockerfile: Dockerfile
+  
+  # 端口映射
+  ports:
+    - "3008:3008"
+  
+  # 环境变量
+  env:
+    NODE_ENV: production
+    PORT: 3008
+    NEXT_TELEMETRY_DISABLED: 1
+  
+  # 健康检查
+  healthcheck:
+    enabled: true
+    path: /
+    interval: 30
+    timeout: 10
+    retries: 3
+  
+  # 资源限制
+  resources:
+    memory: 512M
+    cpu: 0.5
+  
+  # 自动重启
+  restart: always
+  
+  # 域名配置（可选）
+  # domains:
+  #   - ai-invoice.yourdomain.com
+
