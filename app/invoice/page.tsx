@@ -5,42 +5,45 @@ import { useSearchParams } from 'next/navigation';
 import ChatInterface from '@/components/ChatInterface';
 import InvoicePreview from '@/components/InvoicePreview';
 import { ParsedInvoice } from '@/lib/invoiceParser';
-import { ArrowLeft, FileText } from 'lucide-react';
+import { ArrowLeft, FileText, Sparkles } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
 function InvoiceContent() {
   const [invoiceData, setInvoiceData] = useState<ParsedInvoice | null>(null);
-  const [initialInput, setInitialInput] = useState<string>('');
+  const [initialData, setInitialData] = useState<{
+    customer?: string;
+    product?: string;
+    amount?: string;
+    quantity?: string;
+    unitPrice?: string;
+  } | null>(null);
   const [isReady, setIsReady] = useState(false);
   const router = useRouter();
   const searchParams = useSearchParams();
 
   useEffect(() => {
-    const inputParam = searchParams.get('input');
-    const autoSubmit = searchParams.get('autoSubmit');
+    // 解析URL参数
+    const customer = searchParams.get('customer');
+    const product = searchParams.get('product');
+    const amount = searchParams.get('amount');
+    const quantity = searchParams.get('quantity');
+    const unitPrice = searchParams.get('unitPrice');
     
-    console.log('URL params:', { inputParam, autoSubmit });
-    
-    if (inputParam) {
-      try {
-        const decodedInput = decodeURIComponent(inputParam);
-        console.log('Decoded input:', decodedInput);
-        
-        if (autoSubmit === 'true') {
-          setInitialInput(decodedInput + '|autosubmit');
-        } else {
-          setInitialInput(decodedInput);
-        }
-      } catch (e) {
-        console.error('Failed to decode input:', e);
-      }
+    if (customer || product || amount) {
+      setInitialData({
+        customer: customer || undefined,
+        product: product || undefined,
+        amount: amount || undefined,
+        quantity: quantity || undefined,
+        unitPrice: unitPrice || undefined
+      });
     }
     
     setIsReady(true);
   }, [searchParams]);
 
   return (
-    <main className="min-h-screen bg-gradient-to-b from-slate-50 to-white">
+    <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-blue-50/30">
       {/* Header */}
       <header className="sticky top-0 z-50 bg-white/80 backdrop-blur-xl border-b border-slate-200/60 shadow-sm">
         <div className="max-w-7xl mx-auto px-6 lg:px-8">
@@ -48,23 +51,27 @@ function InvoiceContent() {
             <div className="flex items-center space-x-3">
               <button
                 onClick={() => router.push('/')}
-                className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
+                className="p-2 hover:bg-slate-100 rounded-lg transition-colors group"
               >
-                <ArrowLeft className="w-5 h-5 text-slate-600" />
+                <ArrowLeft className="w-5 h-5 text-slate-600 group-hover:text-blue-600 transition-colors" />
               </button>
               <div className="relative">
-                <div className="w-9 h-9 bg-gradient-to-br from-blue-600 to-cyan-500 rounded-lg flex items-center justify-center shadow-lg shadow-blue-500/30">
+                <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-purple-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/30">
                   <FileText className="w-5 h-5 text-white" />
                 </div>
+                <div className="absolute -top-1 -right-1 w-3 h-3 bg-green-500 rounded-full border-2 border-white animate-pulse"></div>
               </div>
               <div>
-                <h1 className="text-lg font-bold text-slate-900">AI智能开票</h1>
-                <p className="text-xs text-slate-500">自然语言 · 智能处理</p>
+                <h1 className="text-lg font-bold text-slate-900 flex items-center">
+                  AI智能开票
+                  <Sparkles className="w-4 h-4 ml-2 text-amber-500" />
+                </h1>
+                <p className="text-xs text-slate-500">智能识别 · 风险预警 · 活动推送</p>
               </div>
             </div>
             <div className="flex items-center space-x-3">
-              <span className="px-3 py-1.5 bg-emerald-50 text-emerald-700 text-xs font-semibold rounded-full border border-emerald-200">
-                在线演示
+              <span className="px-3 py-1.5 bg-gradient-to-r from-emerald-50 to-teal-50 text-emerald-700 text-xs font-semibold rounded-full border border-emerald-200">
+                ✨ 在线演示
               </span>
             </div>
           </div>
@@ -77,7 +84,11 @@ function InvoiceContent() {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* 左侧：对话界面 */}
             <div className="lg:col-span-1">
-              <ChatInterface onInvoiceUpdate={setInvoiceData} initialInput={initialInput} key={initialInput} />
+              <ChatInterface 
+                onInvoiceUpdate={setInvoiceData} 
+                initialData={initialData}
+                key={JSON.stringify(initialData)}
+              />
             </div>
 
             {/* 右侧：发票预览 */}
@@ -99,7 +110,7 @@ function InvoiceContent() {
 export default function InvoicePage() {
   return (
     <Suspense fallback={
-      <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white flex items-center justify-center">
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-blue-50/30 flex items-center justify-center">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
           <p className="mt-4 text-slate-500">加载中...</p>

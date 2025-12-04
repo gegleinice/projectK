@@ -1,357 +1,288 @@
 import { ParsedInvoice } from './invoiceParser';
 
-// ===== 风险预警系统 =====
-
+// 风险预警类型
 export interface RiskWarning {
   id: string;
   level: 'high' | 'medium' | 'low';
-  type: 'amount' | 'frequency' | 'tax' | 'customer' | 'unusual';
   title: string;
   message: string;
   suggestion: string;
-  timestamp: Date;
-  relatedInvoice?: Partial<ParsedInvoice>;
+  category: 'tax' | 'amount' | 'customer' | 'product' | 'compliance';
 }
 
-/**
- * 检测发票风险
- */
-export function detectInvoiceRisks(invoice: ParsedInvoice, history?: ParsedInvoice[]): RiskWarning[] {
-  const risks: RiskWarning[] = [];
-
-  // 1. 异常金额检测
-  if (invoice.amount && invoice.amount > 100000) {
-    risks.push({
-      id: `risk_${Date.now()}_1`,
-      level: 'high',
-      type: 'amount',
-      title: '⚠️ 大额开票提醒',
-      message: `本次开票金额 ¥${invoice.amount.toLocaleString()} 超过10万元`,
-      suggestion: '建议：核对客户信息、商品明细，确保金额准确无误。大额发票请留存相关合同和凭证。',
-      timestamp: new Date(),
-      relatedInvoice: invoice
-    });
-  } else if (invoice.amount && invoice.amount > 50000) {
-    risks.push({
-      id: `risk_${Date.now()}_1`,
-      level: 'medium',
-      type: 'amount',
-      title: '💡 金额提醒',
-      message: `本次开票金额 ¥${invoice.amount.toLocaleString()} 较大`,
-      suggestion: '建议：仔细核对客户信息和商品明细，确保开票信息准确。',
-      timestamp: new Date(),
-      relatedInvoice: invoice
-    });
-  }
-
-  // 2. 税率异常检测
-  if (invoice.taxRate && invoice.category) {
-    const expectedTaxRate = invoice.category === '现代服务' ? 6 : 13;
-    if (invoice.taxRate !== expectedTaxRate) {
-      risks.push({
-        id: `risk_${Date.now()}_2`,
-        level: 'high',
-        type: 'tax',
-        title: '🚨 税率异常',
-        message: `${invoice.category}类商品税率应为${expectedTaxRate}%，当前为${invoice.taxRate}%`,
-        suggestion: '建议：立即核实税率设置，错误税率可能导致税务问题。',
-        timestamp: new Date(),
-        relatedInvoice: invoice
-      });
-    }
-  }
-
-  // 3. 价格异常检测
-  if (invoice.unitPrice && invoice.quantity) {
-    const calculatedAmount = invoice.unitPrice * invoice.quantity;
-    if (invoice.amount && Math.abs(calculatedAmount - invoice.amount) > 0.01) {
-      risks.push({
-        id: `risk_${Date.now()}_3`,
-        level: 'medium',
-        type: 'amount',
-        title: '⚠️ 金额计算异常',
-        message: `单价×数量=${calculatedAmount.toFixed(2)}，与填写金额${invoice.amount}不符`,
-        suggestion: '建议：检查单价、数量、金额是否填写正确。',
-        timestamp: new Date(),
-        relatedInvoice: invoice
-      });
-    }
-  }
-
-  // 4. 客户信息缺失检测
-  if (!invoice.customerInfo && invoice.amount && invoice.amount > 1000) {
-    risks.push({
-      id: `risk_${Date.now()}_4`,
-      level: 'low',
-      type: 'customer',
-      title: '💼 客户信息提醒',
-      message: '未能自动匹配客户详细信息',
-      suggestion: '建议：补充完整的客户税号、地址、电话等信息，避免发票退回。',
-      timestamp: new Date(),
-      relatedInvoice: invoice
-    });
-  }
-
-  // 5. 高频开票检测（如果有历史数据）
-  if (history && history.length > 0) {
-    const today = new Date();
-    const todayInvoices = history.filter(h => {
-      if (!h.invoiceDate) return false;
-      const invoiceDate = new Date(h.invoiceDate);
-      return invoiceDate.toDateString() === today.toDateString();
-    });
-
-    if (todayInvoices.length >= 10) {
-      risks.push({
-        id: `risk_${Date.now()}_5`,
-        level: 'medium',
-        type: 'frequency',
-        title: '📊 高频开票提醒',
-        message: `今日已开具${todayInvoices.length}张发票`,
-        suggestion: '提示：高频开票请注意核对，避免重复开票或信息错误。',
-        timestamp: new Date()
-      });
-    }
-
-    // 检测重复开票
-    const duplicate = history.find(h => 
-      h.customerName === invoice.customerName &&
-      h.productName === invoice.productName &&
-      h.amount === invoice.amount &&
-      h.invoiceDate && new Date(h.invoiceDate).toDateString() === today.toDateString()
-    );
-
-    if (duplicate) {
-      risks.push({
-        id: `risk_${Date.now()}_6`,
-        level: 'high',
-        type: 'unusual',
-        title: '🚨 疑似重复开票',
-        message: '检测到相同客户、相同商品、相同金额的发票记录',
-        suggestion: '警告：请确认是否重复开票，重复开票可能导致严重税务问题！',
-        timestamp: new Date(),
-        relatedInvoice: invoice
-      });
-    }
-  }
-
-  return risks;
-}
-
-// ===== 智能推送系统 =====
-
+// 智能推荐类型
 export interface SmartRecommendation {
   id: string;
   type: 'template' | 'automation' | 'optimization' | 'promotion' | 'tip';
-  priority: 'high' | 'medium' | 'low';
   title: string;
   content: string;
+  icon?: string;
+  priority: number;
   action?: {
     label: string;
-    data?: any;
+    href?: string;
   };
-  icon?: string;
-  timestamp: Date;
 }
 
-/**
- * 生成智能推荐
- */
-export function generateSmartRecommendations(
-  invoice: ParsedInvoice,
-  history?: ParsedInvoice[]
-): SmartRecommendation[] {
-  const recommendations: SmartRecommendation[] = [];
-
-  // 1. 常用客户推荐
-  if (history && history.length > 0) {
-    const customerFrequency: Record<string, number> = {};
-    history.forEach(h => {
-      if (h.customerName) {
-        customerFrequency[h.customerName] = (customerFrequency[h.customerName] || 0) + 1;
-      }
+// 检测发票风险
+export function detectInvoiceRisks(invoice: ParsedInvoice): RiskWarning[] {
+  const risks: RiskWarning[] = [];
+  
+  // 1. 大额发票预警
+  if (invoice.amount && invoice.amount >= 100000) {
+    risks.push({
+      id: 'risk-large-amount',
+      level: invoice.amount >= 500000 ? 'high' : 'medium',
+      title: '大额发票提醒',
+      message: `本次开票金额 ¥${invoice.amount.toLocaleString()} 元，${invoice.amount >= 500000 ? '已超过50万限额' : '接近大额监控标准'}`,
+      suggestion: '建议核实业务真实性，确保合同、付款凭证等备齐',
+      category: 'amount'
     });
+  }
 
-    const frequentCustomers = Object.entries(customerFrequency)
-      .filter(([_, count]) => count >= 3)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 3);
-
-    if (frequentCustomers.length > 0) {
-      recommendations.push({
-        id: `rec_${Date.now()}_1`,
-        type: 'template',
-        priority: 'high',
-        title: '🎯 常用客户快速开票',
-        content: `您经常为 ${frequentCustomers.map(c => c[0]).join('、')} 开票，点击可快速填充信息`,
-        action: {
-          label: '查看模板',
-          data: frequentCustomers.map(c => c[0])
-        },
-        icon: '📋',
-        timestamp: new Date()
+  // 2. 税率异常预警
+  if (invoice.taxRate !== null && invoice.taxRate !== undefined) {
+    const expectedRates = [0, 1, 3, 6, 9, 13];
+    if (!expectedRates.includes(invoice.taxRate)) {
+      risks.push({
+        id: 'risk-tax-rate',
+        level: 'high',
+        title: '税率异常',
+        message: `当前税率 ${invoice.taxRate}% 不在常规税率范围内`,
+        suggestion: '请确认税率是否正确，常见税率为：0%、1%、3%、6%、9%、13%',
+        category: 'tax'
       });
     }
+    
+    // 零税率提醒
+    if (invoice.taxRate === 0 && invoice.amount && invoice.amount > 10000) {
+      risks.push({
+        id: 'risk-zero-tax',
+        level: 'medium',
+        title: '零税率使用提醒',
+        message: '本次使用零税率开票，请确保符合免税条件',
+        suggestion: '零税率适用于出口货物、特定服务等，请核实业务类型',
+        category: 'tax'
+      });
+    }
+  }
+
+  // 3. 客户信息缺失预警
+  if (!invoice.customerInfo?.taxNumber && invoice.customerName) {
+    risks.push({
+      id: 'risk-no-tax-number',
+      level: 'low',
+      title: '税号信息缺失',
+      message: '客户税号未填写，可能影响对方抵扣',
+      suggestion: '建议补充客户统一社会信用代码/税号',
+      category: 'customer'
+    });
+  }
+
+  // 4. 商品类目风险
+  const sensitiveProducts = ['咨询服务', '技术服务', '设计服务', '广告服务'];
+  if (invoice.productName && sensitiveProducts.some(p => invoice.productName?.includes(p))) {
+    if (invoice.amount && invoice.amount >= 50000) {
+      risks.push({
+        id: 'risk-sensitive-product',
+        level: 'medium',
+        title: '服务类发票提醒',
+        message: '服务类发票较易被税务关注，建议留存服务合同',
+        suggestion: '请确保有服务合同、工作成果等证明材料',
+        category: 'product'
+      });
+    }
+  }
+
+  // 5. 单价异常预警
+  if (invoice.unitPrice && invoice.quantity) {
+    if (invoice.unitPrice > 50000) {
+      risks.push({
+        id: 'risk-high-unit-price',
+        level: 'low',
+        title: '单价较高提醒',
+        message: `单价 ¥${invoice.unitPrice.toLocaleString()} 元，建议核对是否正确`,
+        suggestion: '高单价商品请确保定价依据充分',
+        category: 'amount'
+      });
+    }
+  }
+
+  // 6. 首次客户预警
+  if (invoice.customerName && !invoice.customerInfo) {
+    risks.push({
+      id: 'risk-new-customer',
+      level: 'low',
+      title: '新客户开票',
+      message: '该客户为首次开票，请核实客户信息',
+      suggestion: '建议收集客户的营业执照、开票信息等资料',
+      category: 'customer'
+    });
+  }
+
+  // 7. 连续开票预警（模拟）
+  const hour = new Date().getHours();
+  if (hour >= 22 || hour <= 6) {
+    risks.push({
+      id: 'risk-off-hours',
+      level: 'low',
+      title: '非工作时间开票',
+      message: '当前为非工作时间，请确认是否立即开票',
+      suggestion: '建议在工作时间内完成开票操作',
+      category: 'compliance'
+    });
+  }
+
+  return risks.sort((a, b) => {
+    const levelOrder = { high: 0, medium: 1, low: 2 };
+    return levelOrder[a.level] - levelOrder[b.level];
+  });
+}
+
+// 生成智能推荐
+export function generateSmartRecommendations(invoice: ParsedInvoice): SmartRecommendation[] {
+  const recommendations: SmartRecommendation[] = [];
+  
+  // 1. 模板推荐
+  if (invoice.customerName) {
+    recommendations.push({
+      id: 'rec-save-template',
+      type: 'template',
+      title: '保存为常用模板',
+      content: `将「${invoice.customerName}」的开票信息保存为模板，下次开票一键填充`,
+      icon: '📋',
+      priority: 1,
+      action: {
+        label: '立即保存'
+      }
+    });
   }
 
   // 2. 批量开票推荐
-  if (history && history.length >= 5) {
-    const recentInvoices = history.slice(-5);
-    const sameProduct = recentInvoices.every(h => h.productName === invoice.productName);
-    
-    if (sameProduct) {
-      recommendations.push({
-        id: `rec_${Date.now()}_2`,
-        type: 'automation',
-        priority: 'high',
-        title: '⚡ 批量开票建议',
-        content: '检测到您正在为相同商品开具多张发票，使用批量开票可提升效率',
-        action: {
-          label: '启用批量开票'
-        },
-        icon: '🚀',
-        timestamp: new Date()
-      });
-    }
-  }
-
-  // 3. 月末提醒
-  const today = new Date();
-  const daysLeftInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate() - today.getDate();
-  
-  if (daysLeftInMonth <= 3) {
+  if (invoice.quantity && invoice.quantity >= 3) {
     recommendations.push({
-      id: `rec_${Date.now()}_3`,
-      type: 'tip',
-      priority: 'medium',
-      title: '📅 月末开票提醒',
-      content: `本月还剩${daysLeftInMonth}天，建议尽快处理待开票项，避免跨月处理`,
-      icon: '⏰',
-      timestamp: new Date()
-    });
-  }
-
-  // 4. 优惠活动推送
-  if (invoice.amount && invoice.amount > 50000) {
-    recommendations.push({
-      id: `rec_${Date.now()}_4`,
-      type: 'promotion',
-      priority: 'low',
-      title: '🎁 VIP增值服务',
-      content: '您的开票金额较大，可享受专属客户经理一对一服务和发票管理系统升级优惠',
+      id: 'rec-batch-invoice',
+      type: 'automation',
+      title: '试试批量开票',
+      content: '检测到您有多项商品，使用批量开票功能可提升效率',
+      icon: '⚡',
+      priority: 2,
       action: {
-        label: '了解详情'
-      },
-      icon: '💎',
-      timestamp: new Date()
-    });
-  }
-
-  // 5. 智能分类建议
-  if (invoice.productName && !invoice.category) {
-    recommendations.push({
-      id: `rec_${Date.now()}_5`,
-      type: 'optimization',
-      priority: 'medium',
-      title: '🏷️ 商品分类建议',
-      content: '为商品添加分类标签，可以更快地统计分析和税务申报',
-      action: {
-        label: '添加分类'
-      },
-      icon: '📊',
-      timestamp: new Date()
-    });
-  }
-
-  // 6. 电子发票推广
-  if (Math.random() > 0.7) { // 30%概率显示
-    recommendations.push({
-      id: `rec_${Date.now()}_6`,
-      type: 'promotion',
-      priority: 'low',
-      title: '🌱 绿色开票倡议',
-      content: '使用电子发票，环保便捷，支持实时推送和永久存储',
-      icon: '♻️',
-      timestamp: new Date()
-    });
-  }
-
-  // 7. 发票存根管理提醒
-  if (history && history.length > 20) {
-    recommendations.push({
-      id: `rec_${Date.now()}_7`,
-      type: 'tip',
-      priority: 'low',
-      title: '📦 发票存根管理',
-      content: `您已开具${history.length}张发票，建议定期整理归档，可使用发票管理系统进行电子化管理`,
-      action: {
-        label: '查看管理工具'
-      },
-      icon: '🗄️',
-      timestamp: new Date()
-    });
-  }
-
-  return recommendations;
-}
-
-/**
- * 获取发票统计数据（用于推送决策）
- */
-export function getInvoiceStatistics(history: ParsedInvoice[]) {
-  if (!history || history.length === 0) {
-    return {
-      total: 0,
-      totalAmount: 0,
-      avgAmount: 0,
-      topCustomers: [],
-      topProducts: [],
-      monthlyTrend: []
-    };
-  }
-
-  const totalAmount = history.reduce((sum, inv) => sum + (inv.amount || 0), 0);
-  const avgAmount = totalAmount / history.length;
-
-  // 客户排名
-  const customerStats: Record<string, { count: number; amount: number }> = {};
-  history.forEach(inv => {
-    if (inv.customerName) {
-      if (!customerStats[inv.customerName]) {
-        customerStats[inv.customerName] = { count: 0, amount: 0 };
+        label: '了解更多'
       }
-      customerStats[inv.customerName].count++;
-      customerStats[inv.customerName].amount += inv.amount || 0;
+    });
+  }
+
+  // 3. 税收优惠提醒
+  if (invoice.productType === '技术服务' || invoice.productName?.includes('软件')) {
+    recommendations.push({
+      id: 'rec-tax-benefit',
+      type: 'tip',
+      title: '软件产品税收优惠',
+      content: '符合条件的软件产品可享受即征即退政策，实际税负降至3%',
+      icon: '💰',
+      priority: 1,
+      action: {
+        label: '查看政策详情'
+      }
+    });
+  }
+
+  // 4. 电子发票推广
+  recommendations.push({
+    id: 'rec-digital-invoice',
+    type: 'promotion',
+    title: '推荐使用全电发票',
+    content: '全电发票更环保、更便捷，开票成功率更高，归档管理更轻松',
+    icon: '🌿',
+    priority: 3,
+    action: {
+      label: '立即开通'
     }
   });
 
-  const topCustomers = Object.entries(customerStats)
-    .sort((a, b) => b[1].amount - a[1].amount)
-    .slice(0, 5)
-    .map(([name, stats]) => ({ name, ...stats }));
+  // 5. 月度开票分析
+  const day = new Date().getDate();
+  if (day >= 25) {
+    recommendations.push({
+      id: 'rec-monthly-summary',
+      type: 'optimization',
+      title: '月末开票提醒',
+      content: '临近月底，建议尽快完成本月开票，避免跨月账务处理',
+      icon: '📊',
+      priority: 1,
+      action: {
+        label: '查看本月汇总'
+      }
+    });
+  }
 
-  // 商品排名
-  const productStats: Record<string, { count: number; amount: number }> = {};
-  history.forEach(inv => {
-    const productName = inv.productName || inv.productType || '未知';
-    if (!productStats[productName]) {
-      productStats[productName] = { count: 0, amount: 0 };
-    }
-    productStats[productName].count++;
-    productStats[productName].amount += inv.amount || 0;
-  });
+  // 6. 智能归档建议
+  if (invoice.amount && invoice.amount >= 10000) {
+    recommendations.push({
+      id: 'rec-archive',
+      type: 'tip',
+      title: '智能归档已就绪',
+      content: '本张发票将自动归档至「大额发票」分类，方便后续查询',
+      icon: '📁',
+      priority: 4
+    });
+  }
 
-  const topProducts = Object.entries(productStats)
-    .sort((a, b) => b[1].count - a[1].count)
-    .slice(0, 5)
-    .map(([name, stats]) => ({ name, ...stats }));
+  // 7. 限时活动（模拟）
+  if (Math.random() > 0.5) {
+    recommendations.push({
+      id: 'rec-promotion',
+      type: 'promotion',
+      title: '🎁 限时福利',
+      content: '本周开通年度会员享8折优惠，解锁无限批量开票功能',
+      icon: '🎉',
+      priority: 5,
+      action: {
+        label: '立即抢购'
+      }
+    });
+  }
 
-  return {
-    total: history.length,
-    totalAmount,
-    avgAmount,
-    topCustomers,
-    topProducts
-  };
+  // 8. 智能记账联动
+  if (invoice.totalAmount && invoice.totalAmount >= 5000) {
+    recommendations.push({
+      id: 'rec-accounting',
+      type: 'automation',
+      title: '一键同步记账',
+      content: '开票成功后可自动生成记账凭证，账务处理更高效',
+      icon: '🔗',
+      priority: 2,
+      action: {
+        label: '开启同步'
+      }
+    });
+  }
+
+  return recommendations.sort((a, b) => a.priority - b.priority);
 }
 
+// 获取实时活动推送
+export function getLiveNotifications(): SmartRecommendation[] {
+  return [
+    {
+      id: 'live-1',
+      type: 'promotion',
+      title: '🔥 新功能上线',
+      content: 'AI智能识别准确率提升至99%，开票更精准',
+      icon: '🚀',
+      priority: 1
+    },
+    {
+      id: 'live-2',
+      type: 'tip',
+      title: '📢 政策更新',
+      content: '2024年小规模纳税人增值税优惠政策延续，详情点击查看',
+      icon: '📋',
+      priority: 2,
+      action: {
+        label: '查看详情'
+      }
+    }
+  ];
+}

@@ -2,12 +2,26 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { FileText, TrendingUp, Search, Receipt, Sparkles, Send, ArrowRight, CheckCircle, BarChart3, Clock, DollarSign } from 'lucide-react';
+import { FileText, TrendingUp, Search, Receipt, Sparkles, Send, ArrowRight, BarChart3, Clock, DollarSign, X } from 'lucide-react';
+import { searchProducts, Product } from '@/lib/productCatalog';
+import { mockCustomers } from '@/lib/mockData';
 
 export default function Home() {
   const router = useRouter();
   const [showInvoiceInput, setShowInvoiceInput] = useState(false);
-  const [inputValue, setInputValue] = useState('请帮我开票：给 [客户名称] 开 [商品类型]，金额 [数值] 元，数量 [数值] 个，单价 [数值] 元/个');
+  
+  // 槽位数据
+  const [customerValue, setCustomerValue] = useState('');
+  const [productValue, setProductValue] = useState('');
+  const [amountValue, setAmountValue] = useState('');
+  const [quantityValue, setQuantityValue] = useState('');
+  const [unitPriceValue, setUnitPriceValue] = useState('');
+  
+  // 智能建议
+  const [showProductSuggestions, setShowProductSuggestions] = useState(false);
+  const [showCustomerSuggestions, setShowCustomerSuggestions] = useState(false);
+  const [productSuggestions, setProductSuggestions] = useState<Product[]>([]);
+  const [customerSuggestions, setCustomerSuggestions] = useState<string[]>([]);
 
   // Mock 数据：统计信息
   const stats = {
@@ -18,36 +32,9 @@ export default function Home() {
 
   // Mock 数据：最近开票记录
   const recentInvoices = [
-    {
-      id: 1,
-      customer: '腾讯',
-      product: '软件服务',
-      amount: 50000,
-      quantity: 5,
-      unitPrice: 10000,
-      date: '2025-11-27',
-      fullText: '请帮我开票：给腾讯开软件服务，金额50000元，数量5个，单价10000元/个'
-    },
-    {
-      id: 2,
-      customer: '华为',
-      product: '硬件设备',
-      amount: 26000,
-      quantity: 2,
-      unitPrice: 13000,
-      date: '2025-11-26',
-      fullText: '请帮我开票：给华为开硬件设备，金额26000元，数量2台，单价13000元/台'
-    },
-    {
-      id: 3,
-      customer: '阿里巴巴',
-      product: '云服务',
-      amount: 88000,
-      quantity: 12,
-      unitPrice: 7333.33,
-      date: '2025-11-25',
-      fullText: '请帮我开票：给阿里巴巴开云服务，金额88000元，数量12个月，单价7333.33元/月'
-    }
+    { id: 1, customer: '腾讯', product: '软件服务', amount: 50000, quantity: 5, unitPrice: 10000, date: '2025-11-27' },
+    { id: 2, customer: '华为', product: '硬件设备', amount: 26000, quantity: 2, unitPrice: 13000, date: '2025-11-26' },
+    { id: 3, customer: '阿里巴巴', product: '云服务', amount: 88000, quantity: 12, unitPrice: 7333.33, date: '2025-11-25' }
   ];
 
   const features = [
@@ -97,18 +84,81 @@ export default function Home() {
     }
   };
 
-  const handleStartInvoice = () => {
-    const encodedInput = encodeURIComponent(inputValue);
-    router.push(`/invoice?input=${encodedInput}&autoSubmit=true`);
+  // 处理商品输入变化
+  const handleProductChange = (value: string) => {
+    setProductValue(value);
+    if (value.length >= 1) {
+      const results = searchProducts(value, 5);
+      setProductSuggestions(results);
+      setShowProductSuggestions(results.length > 0);
+    } else {
+      setShowProductSuggestions(false);
+    }
   };
 
+  // 处理客户输入变化
+  const handleCustomerChange = (value: string) => {
+    setCustomerValue(value);
+    if (value.length >= 1) {
+      const customerNames = Object.keys(mockCustomers);
+      const filtered = customerNames.filter(name => 
+        name.toLowerCase().includes(value.toLowerCase())
+      );
+      setCustomerSuggestions(filtered);
+      setShowCustomerSuggestions(filtered.length > 0);
+    } else {
+      setShowCustomerSuggestions(false);
+    }
+  };
+
+  // 选择商品
+  const handleSelectProduct = (product: Product) => {
+    setProductValue(product.name);
+    setUnitPriceValue(product.unitPrice.toString());
+    setShowProductSuggestions(false);
+  };
+
+  // 选择客户
+  const handleSelectCustomer = (customer: string) => {
+    setCustomerValue(customer);
+    setShowCustomerSuggestions(false);
+  };
+
+  // 清空所有字段
+  const handleClear = () => {
+    setCustomerValue('');
+    setProductValue('');
+    setAmountValue('');
+    setQuantityValue('');
+    setUnitPriceValue('');
+  };
+
+  // 填充历史记录
   const handleHistoryClick = (invoice: typeof recentInvoices[0]) => {
-    setInputValue(invoice.fullText);
+    setCustomerValue(invoice.customer);
+    setProductValue(invoice.product);
+    setAmountValue(invoice.amount.toString());
+    setQuantityValue(invoice.quantity.toString());
+    setUnitPriceValue(invoice.unitPrice.toString());
+  };
+
+  // 开始开票
+  const handleStartInvoice = () => {
+    const params = new URLSearchParams();
+    if (customerValue) params.set('customer', customerValue);
+    if (productValue) params.set('product', productValue);
+    if (amountValue) params.set('amount', amountValue);
+    if (quantityValue) params.set('quantity', quantityValue);
+    if (unitPriceValue) params.set('unitPrice', unitPriceValue);
+    
+    router.push(`/invoice?${params.toString()}`);
   };
 
   const formatAmount = (amount: number) => {
     return new Intl.NumberFormat('zh-CN').format(amount);
   };
+
+  const canSubmit = customerValue || productValue || amountValue;
 
   return (
     <main className="min-h-screen bg-gradient-to-b from-slate-50 to-white">
@@ -195,15 +245,137 @@ export default function Home() {
                   </div>
                 </div>
 
-                {/* 输入框 */}
-                <div className="mb-6">
-                  <textarea
-                    value={inputValue}
-                    onChange={(e) => setInputValue(e.target.value)}
-                    className="w-full px-6 py-4 text-base text-slate-900 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none transition-all placeholder:text-slate-400"
-                    rows={3}
-                    placeholder="例如：请帮我开票：给腾讯开软件服务，金额50000元..."
-                  />
+                {/* 模板化输入框 - 参考图设计 */}
+                <div className="bg-slate-50 rounded-2xl p-6 border border-slate-200 mb-6">
+                  <div className="flex flex-wrap items-center gap-3 text-lg leading-loose">
+                    <span className="text-blue-600 font-semibold">请帮我开票：给</span>
+                    
+                    {/* 客户名称槽位 */}
+                    <div className="relative">
+                      <input
+                        type="text"
+                        value={customerValue}
+                        onChange={(e) => handleCustomerChange(e.target.value)}
+                        onFocus={() => customerValue && handleCustomerChange(customerValue)}
+                        onBlur={() => setTimeout(() => setShowCustomerSuggestions(false), 200)}
+                        placeholder="客户名称"
+                        className="bg-white border-0 rounded-xl px-5 py-2 text-slate-700 placeholder-slate-400 focus:ring-2 focus:ring-blue-400 transition-all min-w-[180px] text-center font-medium shadow-sm"
+                      />
+                      {/* 客户建议下拉 */}
+                      {showCustomerSuggestions && customerSuggestions.length > 0 && (
+                        <div className="absolute top-full left-0 right-0 mt-2 bg-white border border-slate-200 rounded-xl shadow-xl z-50 overflow-hidden">
+                          {customerSuggestions.map((customer) => (
+                            <button
+                              key={customer}
+                              onClick={() => handleSelectCustomer(customer)}
+                              className="w-full px-4 py-3 text-left hover:bg-blue-50 text-sm font-medium text-slate-700 transition-colors"
+                            >
+                              {customer}
+                              <span className="text-xs text-slate-400 ml-2">→ {mockCustomers[customer].name}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    
+                    <span className="text-blue-600 font-semibold">开</span>
+                    
+                    {/* 商品类型槽位 */}
+                    <div className="relative">
+                      <input
+                        type="text"
+                        value={productValue}
+                        onChange={(e) => handleProductChange(e.target.value)}
+                        onFocus={() => productValue && handleProductChange(productValue)}
+                        onBlur={() => setTimeout(() => setShowProductSuggestions(false), 200)}
+                        placeholder="商品/服务类型"
+                        className="bg-white border-0 rounded-xl px-5 py-2 text-slate-700 placeholder-slate-400 focus:ring-2 focus:ring-blue-400 transition-all min-w-[200px] text-center font-medium shadow-sm"
+                      />
+                      {/* 商品建议下拉 */}
+                      {showProductSuggestions && productSuggestions.length > 0 && (
+                        <div className="absolute top-full left-0 mt-2 bg-white border border-slate-200 rounded-xl shadow-xl z-50 overflow-hidden min-w-[300px]">
+                          <div className="px-4 py-2 bg-blue-50 border-b border-blue-100 text-xs font-semibold text-blue-700">
+                            <Sparkles className="w-3 h-3 inline mr-1" />
+                            智能匹配商品
+                          </div>
+                          {productSuggestions.map((product) => (
+                            <button
+                              key={product.id}
+                              onClick={() => handleSelectProduct(product)}
+                              className="w-full px-4 py-3 text-left hover:bg-blue-50 transition-colors border-b border-slate-100 last:border-0"
+                            >
+                              <div className="flex justify-between items-center">
+                                <div>
+                                  <div className="text-sm font-medium text-slate-800">{product.name}</div>
+                                  <div className="text-xs text-slate-500">{product.category} · {product.unit}</div>
+                                </div>
+                                <div className="text-right">
+                                  <div className="text-sm font-bold text-blue-600">¥{product.unitPrice}</div>
+                                  <div className="text-xs text-slate-400">税率{product.taxRate}%</div>
+                                </div>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    
+                    <span className="text-slate-500">，</span>
+                    <span className="text-blue-600 font-semibold">金额</span>
+                    
+                    {/* 金额槽位 */}
+                    <input
+                      type="text"
+                      value={amountValue}
+                      onChange={(e) => setAmountValue(e.target.value)}
+                      placeholder="金额"
+                      className="bg-white border-0 rounded-xl px-4 py-2 text-slate-700 placeholder-slate-400 focus:ring-2 focus:ring-blue-400 transition-all w-[120px] text-center font-medium shadow-sm"
+                    />
+                    <span className="text-slate-500">元，</span>
+                    
+                    <span className="text-blue-600 font-semibold">数量</span>
+                    
+                    {/* 数量槽位 */}
+                    <input
+                      type="text"
+                      value={quantityValue}
+                      onChange={(e) => setQuantityValue(e.target.value)}
+                      placeholder="数量"
+                      className="bg-white border-0 rounded-xl px-4 py-2 text-slate-700 placeholder-slate-400 focus:ring-2 focus:ring-blue-400 transition-all w-[100px] text-center font-medium shadow-sm"
+                    />
+                    <span className="text-slate-500">个，</span>
+                    
+                    <span className="text-blue-600 font-semibold">单价</span>
+                    
+                    {/* 单价槽位 */}
+                    <input
+                      type="text"
+                      value={unitPriceValue}
+                      onChange={(e) => setUnitPriceValue(e.target.value)}
+                      placeholder="单价"
+                      className="bg-white border-0 rounded-xl px-4 py-2 text-slate-700 placeholder-slate-400 focus:ring-2 focus:ring-blue-400 transition-all w-[120px] text-center font-medium shadow-sm"
+                    />
+                    <span className="text-slate-500">元/个</span>
+                  </div>
+
+                  {/* 操作栏 */}
+                  <div className="flex items-center justify-between mt-6 pt-4 border-t border-slate-200">
+                    <button
+                      onClick={handleClear}
+                      className="flex items-center space-x-1.5 text-sm text-slate-500 hover:text-slate-700 transition-colors"
+                    >
+                      <X className="w-4 h-4" />
+                      <span>清空</span>
+                    </button>
+                    <button
+                      onClick={handleStartInvoice}
+                      disabled={!canSubmit}
+                      className="px-6 py-2.5 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-xl hover:from-blue-600 hover:to-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all font-semibold flex items-center space-x-2 shadow-lg hover:shadow-xl"
+                    >
+                      <Sparkles className="w-4 h-4" />
+                      <span>智能开票</span>
+                    </button>
+                  </div>
                 </div>
 
                 {/* 快速示例 */}
@@ -211,7 +383,13 @@ export default function Home() {
                   <div className="text-sm font-medium text-slate-700 mb-3">💡 快速示例</div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <button
-                      onClick={() => setInputValue('请帮我开票：给腾讯开软件服务，金额50000元，数量5个，单价10000元/个')}
+                      onClick={() => {
+                        setCustomerValue('腾讯');
+                        setProductValue('软件服务');
+                        setAmountValue('50000');
+                        setQuantityValue('5');
+                        setUnitPriceValue('10000');
+                      }}
                       className="text-left p-4 bg-blue-50 hover:bg-blue-100 rounded-xl transition-all border border-blue-100 hover:border-blue-200 group"
                     >
                       <div className="flex items-center justify-between mb-2">
@@ -221,7 +399,13 @@ export default function Home() {
                       <div className="text-xs text-slate-600">腾讯 · 软件服务 · ¥50,000</div>
                     </button>
                     <button
-                      onClick={() => setInputValue('请帮我开票：给华为开硬件设备，金额26000元，数量2台，单价13000元/台')}
+                      onClick={() => {
+                        setCustomerValue('华为');
+                        setProductValue('硬件设备');
+                        setAmountValue('26000');
+                        setQuantityValue('2');
+                        setUnitPriceValue('13000');
+                      }}
                       className="text-left p-4 bg-purple-50 hover:bg-purple-100 rounded-xl transition-all border border-purple-100 hover:border-purple-200 group"
                     >
                       <div className="flex items-center justify-between mb-2">
@@ -270,20 +454,13 @@ export default function Home() {
                   </div>
                 </div>
 
-                {/* 操作按钮 */}
+                {/* 收起按钮 */}
                 <div className="flex items-center justify-between pt-4 border-t border-slate-100">
                   <button
                     onClick={() => setShowInvoiceInput(false)}
                     className="text-sm text-slate-600 hover:text-slate-900 font-medium transition-colors"
                   >
                     收起
-                  </button>
-                  <button
-                    onClick={handleStartInvoice}
-                    className="px-6 py-3 bg-gradient-to-r from-blue-600 to-cyan-600 text-white rounded-xl hover:shadow-lg hover:shadow-blue-500/30 transition-all font-semibold flex items-center space-x-2 group"
-                  >
-                    <span>开始开票</span>
-                    <Send className="w-4 h-4 group-hover:translate-x-0.5 transition-transform" />
                   </button>
                 </div>
               </div>
