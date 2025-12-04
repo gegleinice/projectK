@@ -1,17 +1,21 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { Send, Loader2, AlertCircle, CheckCircle } from 'lucide-react';
+import { Send, Loader2, AlertCircle, CheckCircle, Lightbulb, Shield, TrendingUp, X, Sparkles } from 'lucide-react';
 import { parseInvoiceRequest, validateInvoiceLogic, smartComplete, ParsedInvoice } from '@/lib/invoiceParser';
 import { mockCustomers, productTypes, invoiceTemplates } from '@/lib/mockData';
+import { searchProducts, Product } from '@/lib/productCatalog';
+import { detectInvoiceRisks, generateSmartRecommendations, RiskWarning, SmartRecommendation } from '@/lib/smartFeatures';
 
 interface Message {
   id: string;
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'system';
   content: string;
   timestamp: Date;
-  type?: 'error' | 'success' | 'info' | 'processing';
+  type?: 'error' | 'success' | 'info' | 'processing' | 'warning' | 'recommendation';
   data?: any;
+  risks?: RiskWarning[];
+  recommendations?: SmartRecommendation[];
 }
 
 interface ChatInterfaceProps {
@@ -25,12 +29,6 @@ export default function ChatInterface({ onInvoiceUpdate, initialInput }: ChatInt
   const cleanInitialInput = initialInput && shouldAutoSubmit 
     ? initialInput.replace('|autosubmit', '') 
     : initialInput || '';
-
-  console.log('ChatInterface initialized with:', {
-    initialInput,
-    shouldAutoSubmit,
-    cleanInitialInput
-  });
 
   const defaultTemplate = '请帮我开票：给 [客户名称] 开 [商品类型]，金额 [数值] 元，数量 [数值] 个，单价 [数值] 元/个';
   
@@ -52,15 +50,24 @@ export default function ChatInterface({ onInvoiceUpdate, initialInput }: ChatInt
   const [isProcessing, setIsProcessing] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
   const [hasAutoSubmitted, setHasAutoSubmitted] = useState(false);
+  
+  // 新增：商品搜索相关状态
+  const [productSuggestions, setProductSuggestions] = useState<Product[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  
+  // 新增：风险和推荐
+  const [currentRisks, setCurrentRisks] = useState<RiskWarning[]>([]);
+  const [currentRecommendations, setCurrentRecommendations] = useState<SmartRecommendation[]>([]);
+  
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const suggestionsRef = useRef<HTMLDivElement>(null);
 
   // 当有初始输入且需要自动提交时，自动提交
   useEffect(() => {
     if (shouldAutoSubmit && cleanInitialInput && cleanInitialInput.trim() && !hasAutoSubmitted && cleanInitialInput !== defaultTemplate) {
       setHasAutoSubmitted(true);
-      console.log('Auto-submitting:', cleanInitialInput);
-      // 延迟800ms后自动提交
       setTimeout(() => {
         const form = inputRef.current?.form;
         if (form) {
@@ -79,6 +86,55 @@ export default function ChatInterface({ onInvoiceUpdate, initialInput }: ChatInt
     scrollToBottom();
   }, [messages]);
 
+  // 商品智能搜索
+  useEffect(() => {
+    // 从输入中提取可能的商品关键词
+    const extractProductKeyword = (text: string): string => {
+      const patterns = [
+        /开\s*([^\s，。,]+)/,
+        /商品[类型]*[:：]?\s*([^\s，。,]+)/,
+        /\*\*([^\*]+)\*\*/,
+        /\[([^\]]+)\]/
+      ];
+      
+      for (const pattern of patterns) {
+        const match = text.match(pattern);
+        if (match && match[1]) {
+          return match[1].trim();
+        }
+      }
+      return '';
+    };
+
+    const keyword = extractProductKeyword(input);
+    
+    if (keyword && keyword.length >= 2 && !keyword.includes('客户') && !keyword.includes('金额')) {
+      setSearchQuery(keyword);
+      const results = searchProducts(keyword, 5);
+      setProductSuggestions(results);
+      setShowSuggestions(results.length > 0 && isFocused);
+    } else {
+      setShowSuggestions(false);
+      setProductSuggestions([]);
+    }
+  }, [input, isFocused]);
+
+  // 点击外部关闭建议框
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (
+        suggestionsRef.current &&
+        !suggestionsRef.current.contains(event.target as Node) &&
+        !inputRef.current?.contains(event.target as Node)
+      ) {
+        setShowSuggestions(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() || isProcessing) return;
@@ -94,6 +150,7 @@ export default function ChatInterface({ onInvoiceUpdate, initialInput }: ChatInt
     const userInput = input;
     setInput('');
     setIsProcessing(true);
+    setShowSuggestions(false);
 
     // 步骤1: 开始解析
     const processingMessage: Message = {
@@ -228,6 +285,13 @@ export default function ChatInterface({ onInvoiceUpdate, initialInput }: ChatInt
 
       const completed = smartComplete(parsed, mockCustomers, productTypes, invoiceTemplates);
       
+      // 新增：风险检测
+      const risks = detectInvoiceRisks(completed);
+      const recommendations = generateSmartRecommendations(completed);
+      
+      setCurrentRisks(risks);
+      setCurrentRecommendations(recommendations);
+      
       // 步骤5: 显示确认信息
       let confirmContent = '✅ 信息解析完成，请确认以下开票信息：\n\n';
       confirmContent += `━━━━━━━━━━━━━━━━━━━━\n`;
@@ -259,10 +323,41 @@ export default function ChatInterface({ onInvoiceUpdate, initialInput }: ChatInt
         content: confirmContent,
         timestamp: new Date(),
         type: 'success',
-        data: completed
+        data: completed,
+        risks: risks,
+        recommendations: recommendations
       };
 
       setMessages(prev => [...prev.slice(0, -1), confirmMessage]);
+      
+      // 如果有高风险警告，显示风险提示消息
+      const highRisks = risks.filter(r => r.level === 'high');
+      if (highRisks.length > 0) {
+        const riskMessage: Message = {
+          id: (Date.now() + 7).toString(),
+          role: 'system',
+          content: '检测到风险项，请注意核对',
+          timestamp: new Date(),
+          type: 'warning',
+          risks: highRisks
+        };
+        setMessages(prev => [...prev, riskMessage]);
+      }
+      
+      // 如果有高优先级推荐，显示推荐消息
+      const highPriorityRecs = recommendations.filter(r => r.priority === 'high');
+      if (highPriorityRecs.length > 0) {
+        const recMessage: Message = {
+          id: (Date.now() + 8).toString(),
+          role: 'system',
+          content: '为您推荐',
+          timestamp: new Date(),
+          type: 'recommendation',
+          recommendations: highPriorityRecs
+        };
+        setMessages(prev => [...prev, recMessage]);
+      }
+      
       onInvoiceUpdate(completed);
 
     } catch (error) {
@@ -287,17 +382,84 @@ export default function ChatInterface({ onInvoiceUpdate, initialInput }: ChatInt
     }
   };
 
+  // 选择商品建议
+  const handleSelectProduct = (product: Product) => {
+    // 替换输入中的商品关键词
+    let newInput = input.replace(searchQuery, product.name);
+    
+    // 如果没有单价，自动填充
+    if (!input.match(/单价.*\d/)) {
+      newInput += `，单价 ${product.unitPrice} 元/${product.unit}`;
+    }
+    
+    setInput(newInput);
+    setShowSuggestions(false);
+    inputRef.current?.focus();
+  };
+
+  // 渲染风险警告卡片
+  const renderRiskCard = (risk: RiskWarning) => {
+    const levelColors = {
+      high: 'bg-red-50 border-red-300 text-red-800',
+      medium: 'bg-orange-50 border-orange-300 text-orange-800',
+      low: 'bg-yellow-50 border-yellow-300 text-yellow-800'
+    };
+
+    const levelIcons = {
+      high: '🚨',
+      medium: '⚠️',
+      low: '💡'
+    };
+
+    return (
+      <div key={risk.id} className={`border-2 rounded-xl p-4 mb-2 ${levelColors[risk.level]}`}>
+        <div className="flex items-start">
+          <span className="text-2xl mr-3">{levelIcons[risk.level]}</span>
+          <div className="flex-1">
+            <h4 className="font-bold mb-1">{risk.title}</h4>
+            <p className="text-sm mb-2">{risk.message}</p>
+            <p className="text-xs opacity-80">{risk.suggestion}</p>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // 渲染推荐卡片
+  const renderRecommendationCard = (rec: SmartRecommendation) => {
+    const priorityColors = {
+      high: 'bg-blue-50 border-blue-300',
+      medium: 'bg-purple-50 border-purple-300',
+      low: 'bg-gray-50 border-gray-300'
+    };
+
+    return (
+      <div key={rec.id} className={`border-2 rounded-xl p-4 mb-2 ${priorityColors[rec.priority]}`}>
+        <div className="flex items-start">
+          <span className="text-2xl mr-3">{rec.icon || '💡'}</span>
+          <div className="flex-1">
+            <h4 className="font-bold text-gray-800 mb-1">{rec.title}</h4>
+            <p className="text-sm text-gray-700 mb-2">{rec.content}</p>
+            {rec.action && (
+              <button className="text-xs bg-blue-500 text-white px-3 py-1 rounded-lg hover:bg-blue-600 transition-colors">
+                {rec.action.label}
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="bg-white rounded-2xl shadow-xl border border-gray-200 flex flex-col h-[calc(100vh-240px)] min-h-[600px]">
       {/* Chat Header */}
       <div className="px-6 py-4 border-b border-gray-200 bg-gradient-to-r from-blue-500 to-purple-600 rounded-t-2xl">
         <h2 className="text-lg font-semibold text-white flex items-center">
-          <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
-          </svg>
-          对话式开票
+          <Sparkles className="w-5 h-5 mr-2" />
+          AI智能开票助手
         </h2>
-        <p className="text-sm text-blue-100 mt-1">告诉我您的需求，我来帮您智能开票</p>
+        <p className="text-sm text-blue-100 mt-1">智能识别·风险预警·活动推送</p>
       </div>
 
       {/* Messages Area */}
@@ -308,18 +470,23 @@ export default function ChatInterface({ onInvoiceUpdate, initialInput }: ChatInt
             className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'} animate-fadeIn`}
           >
             <div
-              className={`max-w-[80%] rounded-2xl px-4 py-3 ${
+              className={`max-w-[85%] rounded-2xl px-4 py-3 ${
                 message.role === 'user'
                   ? 'bg-gradient-to-r from-blue-500 to-purple-600 text-white animate-slideInRight'
                   : message.type === 'error'
                   ? 'bg-red-50 border-2 border-red-500 text-red-700 animate-slideInLeft'
                   : message.type === 'success'
                   ? 'bg-green-50 border border-green-200 text-green-900 animate-slideInLeft'
+                  : message.type === 'warning'
+                  ? 'bg-orange-50 border-2 border-orange-400 text-orange-900 animate-slideInLeft'
+                  : message.type === 'recommendation'
+                  ? 'bg-blue-50 border-2 border-blue-400 text-blue-900 animate-slideInLeft'
                   : message.type === 'processing'
                   ? 'bg-yellow-50 border border-yellow-200 text-yellow-900 animate-slideInLeft'
                   : 'bg-gray-100 text-gray-800 animate-slideInLeft'
               }`}
             >
+              {/* 消息头部图标 */}
               {message.type === 'error' && (
                 <div className="flex items-start mb-2">
                   <AlertCircle className="w-5 h-5 mr-2 flex-shrink-0 mt-0.5" />
@@ -332,17 +499,49 @@ export default function ChatInterface({ onInvoiceUpdate, initialInput }: ChatInt
                   <span className="font-semibold">解析成功</span>
                 </div>
               )}
+              {message.type === 'warning' && (
+                <div className="flex items-center mb-2">
+                  <Shield className="w-5 h-5 mr-2 flex-shrink-0" />
+                  <span className="font-semibold">风险预警</span>
+                </div>
+              )}
+              {message.type === 'recommendation' && (
+                <div className="flex items-center mb-2">
+                  <TrendingUp className="w-5 h-5 mr-2 flex-shrink-0" />
+                  <span className="font-semibold">智能推荐</span>
+                </div>
+              )}
+              
+              {/* 处理中动画 */}
               {message.type === 'processing' && (
                 <div className="flex items-center">
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                   <span>{message.content}</span>
                 </div>
               )}
+              
+              {/* 消息内容 */}
               {message.type !== 'processing' && (
                 <div className="whitespace-pre-wrap text-sm leading-relaxed">
                   {message.content}
                 </div>
               )}
+
+              {/* 风险警告卡片 */}
+              {message.risks && message.risks.length > 0 && (
+                <div className="mt-3 space-y-2">
+                  {message.risks.map(risk => renderRiskCard(risk))}
+                </div>
+              )}
+
+              {/* 推荐卡片 */}
+              {message.recommendations && message.recommendations.length > 0 && (
+                <div className="mt-3 space-y-2">
+                  {message.recommendations.map(rec => renderRecommendationCard(rec))}
+                </div>
+              )}
+
+              {/* 时间戳 */}
               <div
                 className={`text-xs mt-2 ${
                   message.role === 'user' ? 'text-blue-100' : 'text-gray-500'
@@ -363,18 +562,62 @@ export default function ChatInterface({ onInvoiceUpdate, initialInput }: ChatInt
       <div className="p-4 border-t border-gray-200 bg-gray-50 rounded-b-2xl">
         <form onSubmit={handleSubmit} className="flex items-end space-x-3">
           <div className="flex-1 relative">
+            {/* 商品建议下拉框 */}
+            {showSuggestions && productSuggestions.length > 0 && (
+              <div
+                ref={suggestionsRef}
+                className="absolute bottom-full left-0 right-0 mb-2 bg-white border-2 border-blue-300 rounded-xl shadow-2xl overflow-hidden z-50 animate-slideInUp"
+              >
+                <div className="px-4 py-2 bg-gradient-to-r from-blue-50 to-purple-50 border-b border-blue-200">
+                  <div className="flex items-center text-sm font-semibold text-blue-900">
+                    <Sparkles className="w-4 h-4 mr-2" />
+                    智能匹配商品 ({productSuggestions.length})
+                  </div>
+                </div>
+                <div className="max-h-64 overflow-y-auto">
+                  {productSuggestions.map((product, index) => (
+                    <button
+                      key={product.id}
+                      type="button"
+                      onClick={() => handleSelectProduct(product)}
+                      className="w-full px-4 py-3 text-left hover:bg-blue-50 transition-colors border-b border-gray-100 last:border-b-0"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex-1">
+                          <div className="font-medium text-gray-900 text-sm">{product.name}</div>
+                          <div className="text-xs text-gray-600 mt-1">
+                            {product.category} · {product.unit}
+                            {product.specification && ` · ${product.specification}`}
+                          </div>
+                        </div>
+                        <div className="text-right ml-4">
+                          <div className="text-sm font-bold text-blue-600">
+                            ¥{product.unitPrice}
+                          </div>
+                          <div className="text-xs text-gray-500">税率{product.taxRate}%</div>
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <textarea
               ref={inputRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onFocus={() => setIsFocused(true)}
-              onBlur={() => setIsFocused(false)}
+              onBlur={() => setTimeout(() => setIsFocused(false), 200)}
               onKeyDown={handleKeyDown}
-              placeholder="请帮我开票：给 [客户名称] 开 [商品类型]，金额 [数值] 元，数量 [数值] 个，单价 [数值] 元/个..."
-              className="w-full px-4 py-3 pr-12 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none bg-white text-gray-900 placeholder-gray-400"
+              placeholder="请输入开票需求，例如：给腾讯开软件开发服务，金额 10000 元..."
+              className={`w-full px-4 py-3 pr-12 border-2 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none bg-white text-gray-900 placeholder-gray-400 transition-all ${
+                isFocused ? 'border-blue-400 shadow-lg' : 'border-gray-300'
+              }`}
               style={{
-                // 用CSS自定义槽位颜色效果
-                background: 'white',
+                background: input.match(/\[([^\]]+)\]/) 
+                  ? 'linear-gradient(to right, #ffffff 0%, #f0f9ff 100%)'
+                  : 'white',
               }}
               rows={3}
               disabled={isProcessing}
@@ -386,7 +629,7 @@ export default function ChatInterface({ onInvoiceUpdate, initialInput }: ChatInt
           <button
             type="submit"
             disabled={!input.trim() || isProcessing}
-            className="px-6 py-3 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-xl hover:from-blue-600 hover:to-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 flex items-center space-x-2 shadow-lg hover:shadow-xl"
+            className="px-6 py-3 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-xl hover:from-blue-600 hover:to-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 flex items-center space-x-2 shadow-lg hover:shadow-xl transform hover:scale-105"
           >
             {isProcessing ? (
               <Loader2 className="w-5 h-5 animate-spin" />
@@ -397,12 +640,73 @@ export default function ChatInterface({ onInvoiceUpdate, initialInput }: ChatInt
           </button>
         </form>
         <div className="mt-2 text-xs text-gray-500 flex items-center justify-between">
-          <span>💡 提示：用方括号 [] 标记的内容可直接替换</span>
-          <span className="text-blue-600">支持自然语言输入</span>
+          <span>💡 开始输入商品名称，系统将智能匹配推荐</span>
+          <span className="text-blue-600 flex items-center">
+            <Sparkles className="w-3 h-3 mr-1" />
+            支持自然语言输入
+          </span>
         </div>
       </div>
 
       <style jsx>{`
+        @keyframes slideInRight {
+          from {
+            opacity: 0;
+            transform: translateX(20px);
+          }
+          to {
+            opacity: 1;
+            transform: translateX(0);
+          }
+        }
+
+        @keyframes slideInLeft {
+          from {
+            opacity: 0;
+            transform: translateX(-20px);
+          }
+          to {
+            opacity: 1;
+            transform: translateX(0);
+          }
+        }
+
+        @keyframes slideInUp {
+          from {
+            opacity: 0;
+            transform: translateY(10px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+
+        @keyframes fadeIn {
+          from {
+            opacity: 0;
+          }
+          to {
+            opacity: 1;
+          }
+        }
+
+        .animate-slideInRight {
+          animation: slideInRight 0.3s ease-out;
+        }
+
+        .animate-slideInLeft {
+          animation: slideInLeft 0.3s ease-out;
+        }
+
+        .animate-slideInUp {
+          animation: slideInUp 0.2s ease-out;
+        }
+
+        .animate-fadeIn {
+          animation: fadeIn 0.3s ease-out;
+        }
+
         textarea {
           font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
         }
