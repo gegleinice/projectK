@@ -344,3 +344,4 @@ export function getCategories(): string[] {
   return Array.from(new Set(productCatalog.map(p => p.category)));
 }
 
+
