@@ -2,12 +2,14 @@
 
 import { ParsedInvoice } from '@/lib/invoiceParser';
 import { FileText } from 'lucide-react';
+import { CompanyInfo } from '@/lib/auth';
 
 interface InvoicePreviewProps {
   invoiceData: ParsedInvoice | null;
+  sellerInfo?: CompanyInfo | null;
 }
 
-export default function InvoicePreview({ invoiceData }: InvoicePreviewProps) {
+export default function InvoicePreview({ invoiceData, sellerInfo }: InvoicePreviewProps) {
   const today = new Date().toLocaleDateString('zh-CN', {
     year: 'numeric',
     month: '2-digit',
@@ -104,11 +106,11 @@ export default function InvoicePreview({ invoiceData }: InvoicePreviewProps) {
                 <div className="flex-1">
                   <div className="text-sm mb-2">
                     <span className="text-gray-600">名称：</span>
-                    <span className="font-medium text-gray-900">企享云科技有限公司</span>
+                    <span className="font-medium text-gray-900">{sellerInfo?.name || '企享云科技有限公司'}</span>
                   </div>
                   <div className="text-sm mb-2">
                     <span className="text-gray-600">统一社会信用代码/纳税人识别号：</span>
-                    <span className="font-mono text-gray-900 text-xs">91440300MA5XXXXXX</span>
+                    <span className="font-mono text-gray-900 text-xs">{sellerInfo?.creditCode || '91440300MA5XXXXXX'}</span>
                   </div>
                 </div>
               </div>

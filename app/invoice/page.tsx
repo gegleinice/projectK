@@ -5,8 +5,9 @@ import { useSearchParams } from 'next/navigation';
 import ChatInterface from '@/components/ChatInterface';
 import InvoicePreview from '@/components/InvoicePreview';
 import { ParsedInvoice } from '@/lib/invoiceParser';
-import { ArrowLeft, FileText, Sparkles } from 'lucide-react';
+import { ArrowLeft, FileText, Sparkles, Building2, BadgeCheck } from 'lucide-react';
 import { useRouter } from 'next/navigation';
+import { getCurrentUser, User, CompanyInfo } from '@/lib/auth';
 
 function InvoiceContent() {
   const [invoiceData, setInvoiceData] = useState<ParsedInvoice | null>(null);
@@ -18,10 +19,26 @@ function InvoiceContent() {
     unitPrice?: string;
   } | null>(null);
   const [isReady, setIsReady] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
+  const [company, setCompany] = useState<CompanyInfo | null>(null);
   const router = useRouter();
   const searchParams = useSearchParams();
 
   useEffect(() => {
+    // 检查用户登录和企业绑定
+    const currentUser = getCurrentUser();
+    if (!currentUser) {
+      router.push('/login');
+      return;
+    }
+    if (!currentUser.companyBound || !currentUser.company) {
+      router.push('/user/bindcompany');
+      return;
+    }
+    
+    setUser(currentUser);
+    setCompany(currentUser.company);
+    
     // 解析URL参数
     const customer = searchParams.get('customer');
     const product = searchParams.get('product');
@@ -40,7 +57,7 @@ function InvoiceContent() {
     }
     
     setIsReady(true);
-  }, [searchParams]);
+  }, [searchParams, router]);
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-blue-50/30">
@@ -69,7 +86,15 @@ function InvoiceContent() {
                 <p className="text-xs text-slate-500">智能识别 · 风险预警 · 活动推送</p>
               </div>
             </div>
-            <div className="flex items-center space-x-3">
+            <div className="flex items-center space-x-4">
+              {/* 销售方企业信息 */}
+              {company && (
+                <div className="hidden md:flex items-center space-x-2 px-3 py-1.5 bg-blue-50 rounded-lg border border-blue-100">
+                  <Building2 className="w-4 h-4 text-blue-600" />
+                  <span className="text-sm font-medium text-blue-700">{company.name}</span>
+                  <BadgeCheck className="w-4 h-4 text-emerald-500" />
+                </div>
+              )}
               <span className="px-3 py-1.5 bg-gradient-to-r from-emerald-50 to-teal-50 text-emerald-700 text-xs font-semibold rounded-full border border-emerald-200">
                 ✨ 在线演示
               </span>
@@ -87,13 +112,14 @@ function InvoiceContent() {
               <ChatInterface 
                 onInvoiceUpdate={setInvoiceData} 
                 initialData={initialData}
+                companyInfo={company}
                 key={JSON.stringify(initialData)}
               />
             </div>
 
             {/* 右侧：发票预览 */}
             <div className="lg:col-span-1">
-              <InvoicePreview invoiceData={invoiceData} />
+              <InvoicePreview invoiceData={invoiceData} sellerInfo={company} />
             </div>
           </div>
         ) : (
@@ -121,3 +147,4 @@ export default function InvoicePage() {
     </Suspense>
   );
 }
+

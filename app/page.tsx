@@ -2,13 +2,29 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { FileText, TrendingUp, Search, Receipt, Sparkles, Send, ArrowRight, BarChart3, Clock, DollarSign, X, RefreshCw } from 'lucide-react';
+import { FileText, TrendingUp, Search, Receipt, Sparkles, Send, ArrowRight, BarChart3, Clock, DollarSign, X, RefreshCw, User, LogOut, ChevronDown, Building2, Settings, BadgeCheck } from 'lucide-react';
 import { searchProducts, Product } from '@/lib/productCatalog';
 import { mockCustomers } from '@/lib/mockData';
+import { getCurrentUser, logout, User as UserType } from '@/lib/auth';
 
 export default function Home() {
   const router = useRouter();
   const [showInvoiceInput, setShowInvoiceInput] = useState(false);
+  const [user, setUser] = useState<UserType | null>(null);
+  const [showUserMenu, setShowUserMenu] = useState(false);
+
+  // 检查登录状态
+  useEffect(() => {
+    const currentUser = getCurrentUser();
+    setUser(currentUser);
+  }, []);
+
+  // 登出
+  const handleLogout = () => {
+    logout();
+    setUser(null);
+    setShowUserMenu(false);
+  };
   
   // 槽位数据
   const [customerValue, setCustomerValue] = useState('');
@@ -23,7 +39,7 @@ export default function Home() {
   const [productSuggestions, setProductSuggestions] = useState<Product[]>([]);
   const [customerSuggestions, setCustomerSuggestions] = useState<string[]>([]);
   
-  // 统计数据状态
+  // 统计数据状态 - 从企业信息获取
   const [stats, setStats] = useState({
     monthlyCount: 127,
     monthlyAmount: 1856320,
@@ -31,6 +47,17 @@ export default function Home() {
   });
   const [statsUpdateTime, setStatsUpdateTime] = useState<Date>(new Date());
   const [isRefreshing, setIsRefreshing] = useState(false);
+  
+  // 当用户变化时，更新统计数据
+  useEffect(() => {
+    if (user?.companyBound && user.company) {
+      setStats({
+        monthlyCount: 127, // 模拟数据
+        monthlyAmount: 1856320,
+        remainingQuota: user.company.invoiceQuota || 5000000
+      });
+    }
+  }, [user]);
   
   // 格式化时间
   const formatUpdateTime = (date: Date) => {
@@ -66,6 +93,21 @@ export default function Home() {
     { id: 3, customer: '阿里巴巴', product: '云服务', amount: 88000, quantity: 12, unitPrice: 7333.33, date: '2025-11-25' }
   ];
 
+  // 检查开票权限
+  const checkInvoicePermission = (): boolean => {
+    if (!user) {
+      // 未登录，跳转登录页
+      router.push('/login');
+      return false;
+    }
+    if (!user.companyBound || !user.company) {
+      // 未绑定企业，跳转绑定页
+      router.push('/user/bindcompany');
+      return false;
+    }
+    return true;
+  };
+
   const features = [
     {
       id: 'invoice',
@@ -75,6 +117,7 @@ export default function Home() {
       gradient: 'from-blue-600 to-cyan-500',
       available: true,
       action: () => {
+        if (!checkInvoicePermission()) return;
         setShowInvoiceInput(true);
         setTimeout(() => {
           document.getElementById('invoice-input')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -206,10 +249,108 @@ export default function Home() {
                 <h1 className="text-lg font-bold text-slate-900">AI财税助手</h1>
               </div>
             </div>
-            <div className="flex items-center space-x-3">
+            <div className="flex items-center space-x-4">
               <span className="px-3 py-1.5 bg-emerald-50 text-emerald-700 text-xs font-semibold rounded-full border border-emerald-200">
                 在线演示
               </span>
+              
+              {user ? (
+                // 已登录：显示用户头像和下拉菜单
+                <div className="relative">
+                  <button
+                    onClick={() => setShowUserMenu(!showUserMenu)}
+                    className="flex items-center space-x-2 px-3 py-1.5 rounded-xl hover:bg-slate-100 transition-colors"
+                  >
+                    <div className="w-8 h-8 bg-gradient-to-br from-blue-600 to-cyan-500 rounded-lg flex items-center justify-center text-white text-sm font-bold">
+                      {user.name.substring(0, 1)}
+                    </div>
+                    <span className="text-sm font-medium text-slate-700 hidden sm:block">{user.name}</span>
+                    <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform ${showUserMenu ? 'rotate-180' : ''}`} />
+                  </button>
+                  
+                  {/* 下拉菜单 */}
+                  {showUserMenu && (
+                    <>
+                      <div className="fixed inset-0 z-40" onClick={() => setShowUserMenu(false)} />
+                      <div className="absolute right-0 top-full mt-2 w-64 bg-white rounded-xl shadow-xl border border-slate-200 overflow-hidden z-50">
+                        {/* 用户信息 */}
+                        <div className="px-4 py-3 border-b border-slate-100 bg-slate-50">
+                          <div className="flex items-center space-x-3">
+                            <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-cyan-500 rounded-lg flex items-center justify-center text-white font-bold">
+                              {user.name.substring(0, 1)}
+                            </div>
+                            <div>
+                              <p className="font-semibold text-slate-900">{user.name}</p>
+                              <p className="text-xs text-slate-500">{user.phone}</p>
+                            </div>
+                          </div>
+                          {user.companyBound && user.company && (
+                            <div className="mt-2 flex items-center space-x-1 text-xs text-emerald-600">
+                              <BadgeCheck className="w-3 h-3" />
+                              <span>{user.company.name}</span>
+                            </div>
+                          )}
+                        </div>
+                        
+                        {/* 菜单项 */}
+                        <div className="py-2">
+                          <button
+                            onClick={() => { router.push('/user'); setShowUserMenu(false); }}
+                            className="w-full flex items-center space-x-3 px-4 py-2.5 text-left hover:bg-slate-50 transition-colors"
+                          >
+                            <User className="w-4 h-4 text-slate-400" />
+                            <span className="text-sm text-slate-700">用户中心</span>
+                          </button>
+                          {user.companyBound ? (
+                            <button
+                              onClick={() => { router.push('/user?tab=company'); setShowUserMenu(false); }}
+                              className="w-full flex items-center space-x-3 px-4 py-2.5 text-left hover:bg-slate-50 transition-colors"
+                            >
+                              <Building2 className="w-4 h-4 text-slate-400" />
+                              <span className="text-sm text-slate-700">企业信息</span>
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => { router.push('/user/bindcompany'); setShowUserMenu(false); }}
+                              className="w-full flex items-center space-x-3 px-4 py-2.5 text-left hover:bg-slate-50 transition-colors"
+                            >
+                              <Building2 className="w-4 h-4 text-blue-500" />
+                              <span className="text-sm text-blue-600 font-medium">绑定企业</span>
+                            </button>
+                          )}
+                          <button
+                            onClick={() => { router.push('/user?tab=settings'); setShowUserMenu(false); }}
+                            className="w-full flex items-center space-x-3 px-4 py-2.5 text-left hover:bg-slate-50 transition-colors"
+                          >
+                            <Settings className="w-4 h-4 text-slate-400" />
+                            <span className="text-sm text-slate-700">账号设置</span>
+                          </button>
+                        </div>
+                        
+                        {/* 退出登录 */}
+                        <div className="border-t border-slate-100 py-2">
+                          <button
+                            onClick={handleLogout}
+                            className="w-full flex items-center space-x-3 px-4 py-2.5 text-left hover:bg-red-50 transition-colors"
+                          >
+                            <LogOut className="w-4 h-4 text-red-500" />
+                            <span className="text-sm text-red-600">退出登录</span>
+                          </button>
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+              ) : (
+                // 未登录：显示登录按钮
+                <button
+                  onClick={() => router.push('/login')}
+                  className="flex items-center space-x-2 px-4 py-2 bg-gradient-to-r from-blue-600 to-cyan-500 text-white rounded-xl text-sm font-medium hover:from-blue-700 hover:to-cyan-600 transition-all shadow-sm"
+                >
+                  <User className="w-4 h-4" />
+                  <span>登录</span>
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -239,8 +380,8 @@ export default function Home() {
                   <div className="bg-gradient-to-br from-blue-50 to-cyan-50 rounded-xl p-4 border border-blue-100 relative group">
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center space-x-2">
-                        <BarChart3 className="w-4 h-4 text-blue-600" />
-                        <span className="text-xs font-medium text-blue-600">本月已开票</span>
+                      <BarChart3 className="w-4 h-4 text-blue-600" />
+                      <span className="text-xs font-medium text-blue-600">本月已开票</span>
                       </div>
                       <button
                         onClick={handleRefreshStats}
@@ -262,8 +403,8 @@ export default function Home() {
                   <div className="bg-gradient-to-br from-emerald-50 to-teal-50 rounded-xl p-4 border border-emerald-100 relative group">
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center space-x-2">
-                        <DollarSign className="w-4 h-4 text-emerald-600" />
-                        <span className="text-xs font-medium text-emerald-600">已开票金额</span>
+                      <DollarSign className="w-4 h-4 text-emerald-600" />
+                      <span className="text-xs font-medium text-emerald-600">已开票金额</span>
                       </div>
                       <button
                         onClick={handleRefreshStats}
@@ -285,8 +426,8 @@ export default function Home() {
                   <div className="bg-gradient-to-br from-violet-50 to-purple-50 rounded-xl p-4 border border-violet-100 relative group">
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center space-x-2">
-                        <TrendingUp className="w-4 h-4 text-violet-600" />
-                        <span className="text-xs font-medium text-violet-600">剩余额度</span>
+                      <TrendingUp className="w-4 h-4 text-violet-600" />
+                      <span className="text-xs font-medium text-violet-600">剩余额度</span>
                       </div>
                       <button
                         onClick={handleRefreshStats}

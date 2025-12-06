@@ -1,17 +1,18 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { Send, Loader2, AlertCircle, CheckCircle, Shield, Sparkles, Bell, AlertTriangle, ChevronRight, FileText, Download, Wallet, Check, X } from 'lucide-react';
+import { Send, Loader2, AlertCircle, CheckCircle, Shield, Sparkles, Bell, AlertTriangle, ChevronRight, FileText, Download, Wallet, Check, X, Building2 } from 'lucide-react';
 import { parseInvoiceRequest, validateInvoiceLogic, smartComplete, ParsedInvoice } from '@/lib/invoiceParser';
 import { mockCustomers, productTypes, invoiceTemplates } from '@/lib/mockData';
 import { detectInvoiceRisks, generateSmartRecommendations, RiskWarning, SmartRecommendation } from '@/lib/smartFeatures';
+import { CompanyInfo } from '@/lib/auth';
 
 interface Message {
   id: string;
   role: 'user' | 'assistant' | 'system';
   content: string;
   timestamp: Date;
-  type?: 'error' | 'success' | 'info' | 'processing' | 'risk' | 'recommendation' | 'balance-check' | 'invoice-confirm' | 'invoice-success';
+  type?: 'error' | 'success' | 'info' | 'processing' | 'risk' | 'recommendation' | 'balance-check' | 'invoice-confirm' | 'invoice-success' | 'seller-info';
   data?: any;
 }
 
@@ -26,25 +27,48 @@ interface InitialData {
 interface ChatInterfaceProps {
   onInvoiceUpdate: (invoice: ParsedInvoice | null) => void;
   initialData?: InitialData | null;
+  companyInfo?: CompanyInfo | null;
 }
 
-export default function ChatInterface({ onInvoiceUpdate, initialData }: ChatInterfaceProps) {
-  const [messages, setMessages] = useState<Message[]>([
-    {
+export default function ChatInterface({ onInvoiceUpdate, initialData, companyInfo }: ChatInterfaceProps) {
+  // 初始消息包含企业信息
+  const getInitialMessages = (): Message[] => {
+    const msgs: Message[] = [];
+    
+    // 如果有企业信息，先显示销售方信息
+    if (companyInfo) {
+      msgs.push({
+        id: 'seller-info',
+        role: 'system',
+        content: '',
+        timestamp: new Date(),
+        type: 'seller-info',
+        data: companyInfo
+      });
+    }
+    
+    msgs.push({
       id: '1',
       role: 'assistant',
-      content: '您好！我是AI智能开票助手。请告诉我您的开票需求，我会自动为您提取信息并生成发票。',
+      content: companyInfo 
+        ? `您好！我是AI智能开票助手。当前开票企业：${companyInfo.name}（${companyInfo.taxType}），请告诉我您的开票需求。`
+        : '您好！我是AI智能开票助手。请告诉我您的开票需求，我会自动为您提取信息并生成发票。',
       timestamp: new Date(),
       type: 'info'
-    }
-  ]);
+    });
+    
+    return msgs;
+  };
+  
+  const [messages, setMessages] = useState<Message[]>(getInitialMessages());
   
   const [input, setInput] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [currentRisks, setCurrentRisks] = useState<RiskWarning[]>([]);
   const [currentRecommendations, setCurrentRecommendations] = useState<SmartRecommendation[]>([]);
   const [pendingInvoice, setPendingInvoice] = useState<ParsedInvoice | null>(null);
-  const [invoiceBalance] = useState(5000000); // 模拟开票余额：500万
+  // 从企业信息获取开票余额
+  const [invoiceBalance] = useState(companyInfo?.invoiceQuota || 5000000);
   const [isConfirming, setIsConfirming] = useState(false);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -352,6 +376,81 @@ export default function ChatInterface({ onInvoiceUpdate, initialData }: ChatInte
     }
   };
 
+  // 渲染销售方企业信息卡片
+  const renderSellerInfoCard = (company: CompanyInfo) => {
+    return (
+      <div className="w-full max-w-md animate-slideUp mb-4">
+        <div className="rounded-2xl overflow-hidden border border-blue-200 bg-gradient-to-br from-blue-50 to-cyan-50">
+          <div className="px-5 py-4 border-b border-blue-100">
+            <div className="flex items-center space-x-3">
+              <div className="w-12 h-12 bg-gradient-to-br from-blue-600 to-cyan-500 rounded-xl flex items-center justify-center text-white font-bold text-lg">
+                {company.name.substring(0, 2)}
+              </div>
+              <div className="flex-1">
+                <div className="flex items-center space-x-2">
+                  <Building2 className="w-4 h-4 text-blue-600" />
+                  <span className="text-xs text-blue-600 font-medium">销售方 · 企享云认证</span>
+                </div>
+                <h3 className="font-bold text-slate-900 mt-1">{company.name}</h3>
+              </div>
+            </div>
+          </div>
+          
+          <div className="px-5 py-4">
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <div>
+                <span className="text-slate-500">纳税人识别号</span>
+                <p className="font-mono text-slate-800 mt-0.5">{company.creditCode}</p>
+              </div>
+              <div>
+                <span className="text-slate-500">纳税人类型</span>
+                <p className="text-slate-800 mt-0.5">
+                  <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                    company.taxType === '一般纳税人' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'
+                  }`}>
+                    {company.taxType}
+                  </span>
+                </p>
+              </div>
+              <div className="col-span-2">
+                <span className="text-slate-500">开票地址</span>
+                <p className="text-slate-800 mt-0.5 text-xs">{company.invoiceAddress || company.registeredAddress}</p>
+              </div>
+              {company.invoicePhone && (
+                <div>
+                  <span className="text-slate-500">联系电话</span>
+                  <p className="text-slate-800 mt-0.5">{company.invoicePhone}</p>
+                </div>
+              )}
+              {company.bankName && (
+                <div>
+                  <span className="text-slate-500">开户银行</span>
+                  <p className="text-slate-800 mt-0.5 text-xs">{company.bankName}</p>
+                </div>
+              )}
+            </div>
+            
+            {company.mainBusiness && company.mainBusiness.length > 0 && (
+              <div className="mt-3 pt-3 border-t border-blue-100">
+                <span className="text-xs text-slate-500 flex items-center">
+                  <Sparkles className="w-3 h-3 mr-1 text-amber-500" />
+                  主营业务
+                </span>
+                <div className="flex flex-wrap gap-1.5 mt-2">
+                  {company.mainBusiness.slice(0, 4).map((business, i) => (
+                    <span key={i} className="px-2 py-0.5 bg-white rounded text-xs text-slate-600 border border-slate-200">
+                      {business}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   // 渲染余额检查卡片
   const renderBalanceCheckCard = (data: string) => {
     const { balance, required, sufficient } = JSON.parse(data);
@@ -420,6 +519,17 @@ export default function ChatInterface({ onInvoiceUpdate, initialData }: ChatInte
           
           <div className="bg-white p-5">
             <div className="space-y-3 mb-5">
+              {/* 销售方信息 */}
+              {companyInfo && (
+                <div className="bg-blue-50 rounded-lg p-3 mb-3">
+                  <div className="text-xs text-blue-600 mb-1 flex items-center">
+                    <Building2 className="w-3 h-3 mr-1" />
+                    销售方
+                  </div>
+                  <div className="font-medium text-slate-800 text-sm">{companyInfo.name}</div>
+                  <div className="text-xs text-slate-500 font-mono mt-0.5">{companyInfo.creditCode}</div>
+                </div>
+              )}
               <div className="flex justify-between items-center py-2 border-b border-gray-100">
                 <span className="text-gray-500 text-sm">购买方</span>
                 <span className="font-medium text-gray-800">{invoice.customerInfo?.name || invoice.customerName}</span>
@@ -482,13 +592,19 @@ export default function ChatInterface({ onInvoiceUpdate, initialData }: ChatInte
             <p className="text-white/80 text-sm">电子发票已生成</p>
           </div>
           
-          {/* 发票信息 */}
+            {/* 发票信息 */}
           <div className="bg-white p-5">
             <div className="bg-gray-50 rounded-xl p-4 mb-4">
               <div className="flex items-center justify-between mb-3">
                 <span className="text-gray-500 text-sm">发票号码</span>
                 <span className="font-mono font-bold text-gray-800">{pdf.invoiceNumber}</span>
               </div>
+              {companyInfo && (
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-gray-500 text-sm">销售方</span>
+                  <span className="font-medium text-gray-800 text-xs">{companyInfo.name}</span>
+                </div>
+              )}
               <div className="flex items-center justify-between mb-3">
                 <span className="text-gray-500 text-sm">购买方</span>
                 <span className="font-medium text-gray-800">{invoice.customerInfo?.name || invoice.customerName}</span>
@@ -665,6 +781,13 @@ export default function ChatInterface({ onInvoiceUpdate, initialData }: ChatInte
             key={message.id}
             className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'} animate-fadeIn`}
           >
+            {/* 销售方企业信息卡片 */}
+            {message.type === 'seller-info' && message.data && (
+              <div className="w-full flex justify-start">
+                {renderSellerInfoCard(message.data as CompanyInfo)}
+              </div>
+            )}
+            
             {/* 余额检查卡片 */}
             {message.type === 'balance-check' && (
               <div className="w-full flex justify-start">
