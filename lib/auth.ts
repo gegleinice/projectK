@@ -203,6 +203,7 @@ export function loginOrRegister(phone: string): User {
     phone,
     name: `用户${phone.slice(-4)}`,
     createdAt: new Date().toISOString().split('T')[0],
+    verified: false,
     companyBound: false
   };
   
