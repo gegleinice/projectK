@@ -98,7 +98,12 @@ export default function SmartInputField({ onSubmit, disabled, initialData }: Sma
 
   // 获取客户建议（历史 + 搜索）
   const getCustomerSuggestions = useCallback((query: string): { history: SuggestionItem[], search: SuggestionItem[] } => {
-    const allCustomers = getAllCustomers();
+    const allCustomersMap = getAllCustomers();
+    // 将对象转换为数组，添加 key 属性
+    const allCustomers = Object.entries(allCustomersMap).map(([key, value]) => ({
+      key,
+      ...value
+    }));
     
     // 历史记录
     const historyItems = query 
@@ -268,7 +273,8 @@ export default function SmartInputField({ onSubmit, disabled, initialData }: Sma
     
     // 提交时也添加到历史记录
     if (customerValue) {
-      const allCustomers = getAllCustomers();
+      const allCustomersMap = getAllCustomers();
+      const allCustomers = Object.entries(allCustomersMap).map(([key, value]) => ({ key, ...value }));
       const customer = allCustomers.find(c => c.key === customerValue || c.name.includes(customerValue));
       addCustomerToHistory({
         key: customerValue,
