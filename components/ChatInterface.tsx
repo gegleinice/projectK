@@ -106,7 +106,8 @@ export default function ChatInterface({ onInvoiceUpdate, initialData, companyInf
       if (customer || product || amount) {
         hasProcessedRef.current = true;
         setTimeout(() => {
-          processMessage(inputText, invoiceType || '普票');
+          const type: '普票' | '专票' = invoiceType === '专票' ? '专票' : '普票';
+          processMessage(inputText, type);
         }, 500);
       }
     }
