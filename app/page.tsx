@@ -2,16 +2,21 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { FileText, TrendingUp, Search, Receipt, Sparkles, Send, ArrowRight, BarChart3, Clock, DollarSign, X, RefreshCw, User, LogOut, ChevronDown, Building2, Settings, BadgeCheck } from 'lucide-react';
+import { FileText, TrendingUp, Search, Receipt, Sparkles, Send, ArrowRight, BarChart3, Clock, DollarSign, X, RefreshCw, User, LogOut, ChevronDown, Building2, Settings, BadgeCheck, Check } from 'lucide-react';
 import { searchProducts, Product } from '@/lib/productCatalog';
 import { mockCustomers } from '@/lib/mockData';
-import { getCurrentUser, logout, User as UserType } from '@/lib/auth';
+import { getCurrentUser, logout, User as UserType, UserCompanyRelation } from '@/lib/auth';
+import { bindCompany } from '@/lib/qixiangyun';
 
 export default function Home() {
   const router = useRouter();
   const [showInvoiceInput, setShowInvoiceInput] = useState(false);
   const [user, setUser] = useState<UserType | null>(null);
   const [showUserMenu, setShowUserMenu] = useState(false);
+  
+  // 当前开票企业选择
+  const [showCompanyDropdown, setShowCompanyDropdown] = useState(false);
+  const [switchingCompany, setSwitchingCompany] = useState(false);
 
   // 检查登录状态
   useEffect(() => {
@@ -84,6 +89,38 @@ export default function Home() {
       setStatsUpdateTime(new Date());
       setIsRefreshing(false);
     }, 800);
+  };
+
+  // 切换开票企业
+  const handleSwitchCompany = async (company: UserCompanyRelation) => {
+    if (!user) return;
+    
+    setSwitchingCompany(true);
+    try {
+      const result = await bindCompany(company.companyName);
+      if (result.success && result.companyInfo) {
+        const updatedUser: UserType = {
+          ...user,
+          companyBound: true,
+          company: result.companyInfo
+        };
+        // 更新本地存储
+        localStorage.setItem('ai_invoice_user', JSON.stringify(updatedUser));
+        setUser(updatedUser);
+        // 更新统计数据
+        setStats({
+          monthlyCount: Math.floor(Math.random() * 100) + 50,
+          monthlyAmount: Math.floor(Math.random() * 2000000) + 500000,
+          remainingQuota: result.companyInfo.invoiceQuota || 5000000
+        });
+        setStatsUpdateTime(new Date());
+      }
+    } catch (error) {
+      console.error('切换企业失败', error);
+    } finally {
+      setSwitchingCompany(false);
+      setShowCompanyDropdown(false);
+    }
   };
 
   // Mock 数据：最近开票记录
@@ -375,6 +412,105 @@ export default function Home() {
           <div id="invoice-input" className="mb-12 animate-slideDown">
             <div className="bg-white rounded-2xl shadow-xl border border-slate-200/60 overflow-hidden">
               <div className="p-8">
+                {/* 当前开票企业选择器 */}
+                {user?.companyBound && user.company && (
+                  <div className="mb-6">
+                    <div className="relative">
+                      <button
+                        onClick={() => setShowCompanyDropdown(!showCompanyDropdown)}
+                        className="w-full flex items-center justify-between px-5 py-4 bg-white border-2 border-slate-200 rounded-2xl hover:border-blue-300 transition-all group"
+                      >
+                        <div className="flex items-center space-x-4">
+                          <div className="w-12 h-12 bg-gradient-to-br from-blue-600 to-cyan-500 rounded-xl flex items-center justify-center text-white font-bold text-lg shadow-lg shadow-blue-500/30">
+                            {user.company.name.substring(0, 1)}
+                          </div>
+                          <div className="text-left">
+                            <div className="text-xs text-slate-500 mb-0.5">当前开票企业</div>
+                            <div className="text-base font-semibold text-slate-900">{user.company.name}</div>
+                          </div>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                          {user.relatedCompanies && user.relatedCompanies.length > 1 && (
+                            <span className="text-xs text-slate-400 hidden sm:block">
+                              共 {user.relatedCompanies.length} 家企业
+                            </span>
+                          )}
+                          <ChevronDown className={`w-5 h-5 text-slate-400 transition-transform ${showCompanyDropdown ? 'rotate-180' : ''}`} />
+                        </div>
+                      </button>
+                      
+                      {/* 企业下拉选择 */}
+                      {showCompanyDropdown && user.relatedCompanies && user.relatedCompanies.length > 0 && (
+                        <>
+                          <div className="fixed inset-0 z-40" onClick={() => setShowCompanyDropdown(false)} />
+                          <div className="absolute left-0 right-0 top-full mt-2 bg-white border border-slate-200 rounded-2xl shadow-xl z-50 overflow-hidden">
+                            <div className="px-4 py-3 bg-slate-50 border-b border-slate-100">
+                              <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide">选择开票企业</div>
+                            </div>
+                            <div className="max-h-64 overflow-y-auto">
+                              {user.relatedCompanies.map((company, index) => {
+                                const isCurrentCompany = company.companyName === user.company?.name;
+                                return (
+                                  <button
+                                    key={index}
+                                    onClick={() => !isCurrentCompany && handleSwitchCompany(company)}
+                                    disabled={switchingCompany || isCurrentCompany}
+                                    className={`w-full flex items-center justify-between px-4 py-4 transition-all ${
+                                      isCurrentCompany 
+                                        ? 'bg-blue-50 cursor-default' 
+                                        : 'hover:bg-slate-50 cursor-pointer'
+                                    } ${index !== user.relatedCompanies!.length - 1 ? 'border-b border-slate-100' : ''}`}
+                                  >
+                                    <div className="flex items-center space-x-3">
+                                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-white font-bold ${
+                                        isCurrentCompany 
+                                          ? 'bg-gradient-to-br from-blue-600 to-cyan-500' 
+                                          : 'bg-slate-200 text-slate-600'
+                                      }`}>
+                                        {company.companyName.substring(0, 1)}
+                                      </div>
+                                      <div className="text-left">
+                                        <div className="text-sm font-medium text-slate-900">{company.companyName}</div>
+                                        <div className="flex items-center space-x-2 mt-0.5">
+                                          <span className={`px-2 py-0.5 text-xs rounded-md ${
+                                            company.role === '法定代表人' 
+                                              ? 'bg-violet-100 text-violet-700' 
+                                              : 'bg-slate-100 text-slate-600'
+                                          }`}>
+                                            {company.role}
+                                          </span>
+                                          <span className="text-xs text-slate-400">{company.creditCode}</span>
+                                        </div>
+                                      </div>
+                                    </div>
+                                    {isCurrentCompany && (
+                                      <div className="flex items-center space-x-1 text-blue-600">
+                                        <Check className="w-4 h-4" />
+                                        <span className="text-xs font-medium">当前</span>
+                                      </div>
+                                    )}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                            <div className="px-4 py-3 bg-slate-50 border-t border-slate-100">
+                              <button
+                                onClick={() => {
+                                  setShowCompanyDropdown(false);
+                                  router.push('/user/bindcompany');
+                                }}
+                                className="w-full text-center text-sm text-blue-600 hover:text-blue-700 font-medium"
+                              >
+                                + 绑定其他企业
+                              </button>
+                            </div>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 {/* 统计信息 */}
                 <div className="grid grid-cols-3 gap-4 mb-8">
                   <div className="bg-gradient-to-br from-blue-50 to-cyan-50 rounded-xl p-4 border border-blue-100 relative group">
