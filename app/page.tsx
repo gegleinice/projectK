@@ -241,7 +241,10 @@ export default function Home() {
           id: `company-${inv.id}`,
           name: inv.product,
           category: '该客户常用',
-          unitPrice: inv.unitPrice
+          unitPrice: inv.unitPrice,
+          unit: '个',
+          taxRate: 0.06,
+          lastUsed: Date.now()
         }));
       // 去重
       const uniqueProducts = customerProducts.filter((item, index, self) => 
