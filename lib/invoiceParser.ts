@@ -22,6 +22,7 @@ export interface ParsedInvoice extends InvoiceFields {
   totalAmount?: number;
   productName?: string;
   category?: string;
+  invoiceNumber?: string;
 }
 
 export interface ValidationError {
