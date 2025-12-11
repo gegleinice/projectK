@@ -121,7 +121,7 @@ export default function InvoicePreviewCard({ invoice, companyInfo }: InvoicePrev
               </div>
               <div className="flex">
                 <span className="text-slate-500 w-20 flex-shrink-0">开户银行：</span>
-                <span className="text-slate-600" style={{ fontSize: '10px' }}>{invoice.customerInfo?.bankAccount || '-'}</span>
+                <span className="text-slate-600" style={{ fontSize: '10px' }}>{invoice.customerInfo?.bank ? `${invoice.customerInfo.bank} ${invoice.customerInfo.accountNumber || ''}` : '-'}</span>
               </div>
             </div>
           </div>
