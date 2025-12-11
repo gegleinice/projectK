@@ -2,8 +2,10 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { Send, Loader2, AlertCircle, CheckCircle, Shield, Sparkles, Bell, AlertTriangle, ChevronRight, FileText, Download, Wallet, Check, X, Building2 } from 'lucide-react';
+import InvoicePreviewCard from './InvoicePreviewCard';
 import { parseInvoiceRequest, validateInvoiceLogic, smartComplete, ParsedInvoice } from '@/lib/invoiceParser';
-import { mockCustomers, productTypes, invoiceTemplates } from '@/lib/mockData';
+import { getAllCustomers, productTypes, invoiceTemplates } from '@/lib/mockData';
+import { parseInvoiceWithLLM, toDisplayResult, ParsedInvoiceResult, ParseResultDisplay } from '@/lib/llmService';
 import { detectInvoiceRisks, generateSmartRecommendations, RiskWarning, SmartRecommendation } from '@/lib/smartFeatures';
 import { CompanyInfo } from '@/lib/auth';
 
@@ -12,16 +14,18 @@ interface Message {
   role: 'user' | 'assistant' | 'system';
   content: string;
   timestamp: Date;
-  type?: 'error' | 'success' | 'info' | 'processing' | 'risk' | 'recommendation' | 'balance-check' | 'invoice-confirm' | 'invoice-success' | 'seller-info';
+  type?: 'error' | 'success' | 'info' | 'processing' | 'risk' | 'recommendation' | 'balance-check' | 'invoice-confirm' | 'invoice-success' | 'seller-info' | 'missing-info' | 'invoice-preview' | 'ai-parse-result' | 'parse-complete';
   data?: any;
 }
 
 interface InitialData {
+  invoiceType?: string;
   customer?: string;
   product?: string;
   amount?: string;
   quantity?: string;
   unitPrice?: string;
+  mode?: 'template' | 'freeform';
 }
 
 interface ChatInterfaceProps {
@@ -83,12 +87,16 @@ export default function ChatInterface({ onInvoiceUpdate, initialData, companyInf
     scrollToBottom();
   }, [messages]);
 
-  // 自动提交初始数据
+  // 是否为自由输入模式
+  const isFreeformMode = initialData?.mode === 'freeform';
+
+  // 自动提交初始数据（仅模板模式）
   useEffect(() => {
-    if (initialData && !hasProcessedRef.current) {
-      const { customer, product, amount, quantity, unitPrice } = initialData;
+    if (initialData && !hasProcessedRef.current && initialData.mode !== 'freeform') {
+      const { invoiceType, customer, product, amount, quantity, unitPrice } = initialData;
       
-      let inputText = '请帮我开票：';
+      const invoiceTypeText = invoiceType === '专票' ? '增值税专用发票' : '增值税普通发票';
+      let inputText = `请帮我开一张${invoiceTypeText}：`;
       if (customer) inputText += `给${customer}`;
       if (product) inputText += `开${product}`;
       if (amount) inputText += `，金额${amount}元`;
@@ -98,7 +106,7 @@ export default function ChatInterface({ onInvoiceUpdate, initialData, companyInf
       if (customer || product || amount) {
         hasProcessedRef.current = true;
         setTimeout(() => {
-          processMessage(inputText);
+          processMessage(inputText, invoiceType || '普票');
         }, 500);
       }
     }
@@ -129,7 +137,7 @@ export default function ChatInterface({ onInvoiceUpdate, initialData, companyInf
     const confirmingMsg: Message = {
       id: Date.now().toString(),
       role: 'assistant',
-      content: '🔄 正在生成电子发票...',
+      content: '正在生成电子发票...',
       timestamp: new Date(),
       type: 'processing'
     };
@@ -183,7 +191,7 @@ export default function ChatInterface({ onInvoiceUpdate, initialData, companyInf
   };
 
   // 处理消息
-  const processMessage = async (messageText: string) => {
+  const processMessage = async (messageText: string, invoiceType: '普票' | '专票' = '普票') => {
     if (!messageText.trim() || isProcessing) return;
 
     const userMessage: Message = {
@@ -201,39 +209,103 @@ export default function ChatInterface({ onInvoiceUpdate, initialData, companyInf
     const processingMessage: Message = {
       id: (Date.now() + 1).toString(),
       role: 'assistant',
-      content: '📝 正在解析您的开票需求...',
+      content: isFreeformMode ? 'AI 正在解析您的开票需求...' : '正在解析开票信息...',
       timestamp: new Date(),
       type: 'processing'
     };
     setMessages(prev => [...prev, processingMessage]);
-    await new Promise(resolve => setTimeout(resolve, 800));
 
-    try {
-      const parsed = parseInvoiceRequest(messageText);
+    let parsed;
+    
+    if (isFreeformMode) {
+      // 自由输入模式：使用大模型解析
+      await new Promise(resolve => setTimeout(resolve, 500));
       
-      // 步骤2: 显示解析结果
-      let extractedInfo = '✨ 已提取以下信息：\n\n';
-      if (parsed.customerName) extractedInfo += `👤 客户名称：${parsed.customerName}\n`;
-      if (parsed.productType) extractedInfo += `📦 商品类型：${parsed.productType}\n`;
-      if (parsed.amount !== null) extractedInfo += `💰 金额：${parsed.amount}元\n`;
-      if (parsed.quantity !== null) extractedInfo += `🔢 数量：${parsed.quantity}个\n`;
-      if (parsed.unitPrice !== null) extractedInfo += `💵 单价：${parsed.unitPrice}元/个\n`;
+      const llmResult = await parseInvoiceWithLLM(messageText);
+      
+      // 显示AI解析结果卡片
+      const displayResult = toDisplayResult(llmResult);
+      const aiResultMsg: Message = {
+        id: (Date.now() + 1.5).toString(),
+        role: 'system',
+        content: JSON.stringify(displayResult),
+        timestamp: new Date(),
+        type: 'ai-parse-result'
+      };
+      setMessages(prev => [...prev.slice(0, -1), aiResultMsg]);
+      await new Promise(resolve => setTimeout(resolve, 800));
+      
+      // 如果必填信息缺失，停止流程
+      if (!displayResult.canProceed) {
+        setIsProcessing(false);
+        return;
+      }
+      
+      // 转换为本地解析格式（自动填充可选字段默认值）
+      parsed = {
+        invoiceType: llmResult.invoiceType,
+        customerName: llmResult.customerName || '',
+        productType: llmResult.productType || '',
+        amount: llmResult.amount,
+        quantity: llmResult.quantity || 1,  // 默认数量为1
+        unitPrice: llmResult.unitPrice || llmResult.amount  // 默认单价等于金额
+      };
+    } else {
+      // 模板模式：使用本地解析
+      await new Promise(resolve => setTimeout(resolve, 800));
+      parsed = parseInvoiceRequest(messageText, invoiceType);
+      
+      // 检查必填信息
+      const missingRequired: string[] = [];
+      if (!parsed.customerName) missingRequired.push('客户名称');
+      if (!parsed.productType) missingRequired.push('商品/服务');
+      if (parsed.amount === null) missingRequired.push('金额');
+      
+      const missingOptional: string[] = [];
+      if (parsed.quantity === null) missingOptional.push('数量');
+      if (parsed.unitPrice === null) missingOptional.push('单价');
+      
+      // 显示解析结果卡片
+      const displayResult: ParseResultDisplay = {
+        invoiceType: parsed.invoiceType === '专票' ? '增值税专用发票' : '增值税普通发票',
+        customerName: parsed.customerName || undefined,
+        productType: parsed.productType || undefined,
+        amount: parsed.amount || undefined,
+        quantity: parsed.quantity || undefined,
+        unitPrice: parsed.unitPrice || undefined,
+        missingRequired,
+        missingOptional,
+        confidence: missingRequired.length === 0 ? 90 : 50,
+        canProceed: missingRequired.length === 0
+      };
 
       const extractMsg: Message = {
         id: (Date.now() + 2).toString(),
-        role: 'assistant',
-        content: extractedInfo,
+        role: 'system',
+        content: JSON.stringify(displayResult),
         timestamp: new Date(),
-        type: 'info'
+        type: 'ai-parse-result'
       };
       setMessages(prev => [...prev.slice(0, -1), extractMsg]);
       await new Promise(resolve => setTimeout(resolve, 600));
+      
+      // 如果必填信息缺失，停止流程
+      if (!displayResult.canProceed) {
+        setIsProcessing(false);
+        return;
+      }
+      
+      // 自动填充可选字段默认值
+      if (parsed.quantity === null) parsed.quantity = 1;
+      if (parsed.unitPrice === null) parsed.unitPrice = parsed.amount;
+    }
 
-      // 步骤3: 逻辑校验
+    // 步骤3: 逻辑校验
+    try {
       const validationMsg: Message = {
         id: (Date.now() + 3).toString(),
         role: 'assistant',
-        content: '⚙️ 正在校验数据逻辑...',
+        content: '正在校验数据...',
         timestamp: new Date(),
         type: 'processing'
       };
@@ -246,7 +318,7 @@ export default function ChatInterface({ onInvoiceUpdate, initialData, companyInf
         const errorMessage: Message = {
           id: (Date.now() + 4).toString(),
           role: 'assistant',
-          content: '❌ ' + errors.map(e => e.message).join('\n'),
+          content: errors.map(e => e.message).join('\n'),
           timestamp: new Date(),
           type: 'error'
         };
@@ -260,14 +332,14 @@ export default function ChatInterface({ onInvoiceUpdate, initialData, companyInf
       const completingMsg: Message = {
         id: (Date.now() + 4).toString(),
         role: 'assistant',
-        content: '🤖 正在智能补全客户信息...',
+        content: '正在智能补全信息...',
         timestamp: new Date(),
         type: 'processing'
       };
       setMessages(prev => [...prev.slice(0, -1), completingMsg]);
       await new Promise(resolve => setTimeout(resolve, 700));
 
-      const completed = smartComplete(parsed, mockCustomers, productTypes, invoiceTemplates);
+      const completed = smartComplete(parsed, getAllCustomers(), productTypes, invoiceTemplates);
       
       // 风险检测和智能推荐
       const risks = detectInvoiceRisks(completed);
@@ -276,35 +348,15 @@ export default function ChatInterface({ onInvoiceUpdate, initialData, companyInf
       setCurrentRisks(risks);
       setCurrentRecommendations(recommendations);
       
-      // 步骤5: 显示解析信息
-      let confirmContent = '✅ 信息解析完成：\n\n';
-      confirmContent += `━━━━━━━━━━━━━━━━━━━━\n`;
-      confirmContent += `📋 收票方信息\n`;
-      confirmContent += `   名称：${completed.customerInfo?.name || completed.customerName}\n`;
-      if (completed.customerInfo) {
-        confirmContent += `   税号：${completed.customerInfo.taxNumber}\n`;
-      }
-      confirmContent += `\n🛍️ 商品信息\n`;
-      confirmContent += `   商品：${completed.productName || completed.productType}\n`;
-      if (completed.quantity) confirmContent += `   数量：${completed.quantity}\n`;
-      if (completed.unitPrice) confirmContent += `   单价：¥${completed.unitPrice.toFixed(2)}\n`;
-      if (completed.amount) confirmContent += `   金额：¥${completed.amount.toFixed(2)}\n`;
-      confirmContent += `\n💳 税费信息\n`;
-      if (completed.taxRate) confirmContent += `   税率：${completed.taxRate}%\n`;
-      if (completed.taxAmount) confirmContent += `   税额：¥${completed.taxAmount.toFixed(2)}\n`;
-      if (completed.totalAmount) confirmContent += `   价税合计：¥${completed.totalAmount.toFixed(2)}\n`;
-      confirmContent += `━━━━━━━━━━━━━━━━━━━━`;
-
-      const confirmMessage: Message = {
+      // 步骤5: 直接显示发票预览卡片（跳过重复的解析完成卡片）
+      const invoicePreviewMsg: Message = {
         id: (Date.now() + 5).toString(),
-        role: 'assistant',
-        content: confirmContent,
+        role: 'system',
+        content: JSON.stringify(completed),
         timestamp: new Date(),
-        type: 'success',
-        data: completed
+        type: 'invoice-preview'
       };
-
-      setMessages(prev => [...prev.slice(0, -1), confirmMessage]);
+      setMessages(prev => [...prev.slice(0, -1), invoicePreviewMsg]);
       onInvoiceUpdate(completed);
       
       // 步骤6: 检验开票余额
@@ -376,69 +428,63 @@ export default function ChatInterface({ onInvoiceUpdate, initialData, companyInf
     }
   };
 
-  // 渲染销售方企业信息卡片
+  // 渲染销售方企业信息卡片 - 统一设计语言
   const renderSellerInfoCard = (company: CompanyInfo) => {
     return (
-      <div className="w-full max-w-md animate-slideUp mb-4">
-        <div className="rounded-2xl overflow-hidden border border-blue-200 bg-gradient-to-br from-blue-50 to-cyan-50">
-          <div className="px-5 py-4 border-b border-blue-100">
+      <div className="w-full max-w-md animate-slideUp">
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+          {/* 头部 */}
+          <div className="px-4 py-3 bg-slate-800">
             <div className="flex items-center space-x-3">
-              <div className="w-12 h-12 bg-gradient-to-br from-blue-600 to-cyan-500 rounded-xl flex items-center justify-center text-white font-bold text-lg">
+              <div className="w-8 h-8 bg-amber-400 rounded-lg flex items-center justify-center text-slate-800 font-bold text-sm">
                 {company.name.substring(0, 2)}
               </div>
-              <div className="flex-1">
+              <div className="flex-1 min-w-0">
                 <div className="flex items-center space-x-2">
-                  <Building2 className="w-4 h-4 text-blue-600" />
-                  <span className="text-xs text-blue-600 font-medium">销售方 · 企享云认证</span>
+                  <h3 className="font-semibold text-white text-sm truncate">{company.name}</h3>
+                  <span className="text-amber-400 text-xs flex items-center">
+                    <CheckCircle className="w-3 h-3 mr-0.5" />
+                    已认证
+                  </span>
                 </div>
-                <h3 className="font-bold text-slate-900 mt-1">{company.name}</h3>
               </div>
             </div>
           </div>
           
-          <div className="px-5 py-4">
-            <div className="grid grid-cols-2 gap-3 text-sm">
+          {/* 核心信息 */}
+          <div className="p-4">
+            <div className="grid grid-cols-2 gap-3 mb-3">
               <div>
-                <span className="text-slate-500">纳税人识别号</span>
-                <p className="font-mono text-slate-800 mt-0.5">{company.creditCode}</p>
+                <span className="text-xs text-slate-400">纳税人识别号</span>
+                <p className="font-mono text-slate-700 text-xs mt-0.5">{company.creditCode}</p>
               </div>
               <div>
-                <span className="text-slate-500">纳税人类型</span>
-                <p className="text-slate-800 mt-0.5">
-                  <span className={`px-2 py-0.5 rounded text-xs font-medium ${
-                    company.taxType === '一般纳税人' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'
+                <span className="text-xs text-slate-400">纳税人类型</span>
+                <p className="mt-0.5">
+                  <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${
+                    company.taxType === '一般纳税人' 
+                      ? 'bg-emerald-50 text-emerald-600' 
+                      : 'bg-amber-50 text-amber-600'
                   }`}>
                     {company.taxType}
                   </span>
                 </p>
               </div>
-              <div className="col-span-2">
-                <span className="text-slate-500">开票地址</span>
-                <p className="text-slate-800 mt-0.5 text-xs">{company.invoiceAddress || company.registeredAddress}</p>
-              </div>
-              {company.invoicePhone && (
-                <div>
-                  <span className="text-slate-500">联系电话</span>
-                  <p className="text-slate-800 mt-0.5">{company.invoicePhone}</p>
-                </div>
-              )}
-              {company.bankName && (
-                <div>
-                  <span className="text-slate-500">开户银行</span>
-                  <p className="text-slate-800 mt-0.5 text-xs">{company.bankName}</p>
-                </div>
-              )}
             </div>
             
+            {/* 地址 */}
+            <div className="py-2 border-t border-slate-100">
+              <span className="text-xs text-slate-400">开票地址</span>
+              <p className="text-xs text-slate-600 mt-0.5">{company.invoiceAddress || company.registeredAddress}</p>
+            </div>
+            
+            {/* 主营业务 */}
             {company.mainBusiness && company.mainBusiness.length > 0 && (
-              <div className="mt-3 pt-3 border-t border-blue-100">
-                <span className="text-xs text-slate-500 flex items-center">
-                  <Sparkles className="w-3 h-3 mr-1 text-amber-500" />
-                  主营业务
-                </span>
-                <div className="flex flex-wrap gap-1.5 mt-2">
+              <div className="pt-2 border-t border-slate-100">
+                <span className="text-xs text-slate-400">主营业务</span>
+                <div className="flex items-center gap-1.5 flex-wrap mt-1">
                   {company.mainBusiness.slice(0, 4).map((business, i) => (
-                    <span key={i} className="px-2 py-0.5 bg-white rounded text-xs text-slate-600 border border-slate-200">
+                    <span key={i} className="px-1.5 py-0.5 bg-slate-100 rounded text-xs text-slate-600">
                       {business}
                     </span>
                   ))}
@@ -451,45 +497,68 @@ export default function ChatInterface({ onInvoiceUpdate, initialData, companyInf
     );
   };
 
-  // 渲染余额检查卡片
+  // 渲染余额检查卡片 - 统一设计语言
   const renderBalanceCheckCard = (data: string) => {
     const { balance, required, sufficient } = JSON.parse(data);
+    const remaining = balance - required;
+    const usagePercent = Math.min(100, (required / balance) * 100);
     
     return (
       <div className="w-full max-w-md animate-slideUp">
-        <div className={`rounded-2xl overflow-hidden border-2 ${sufficient ? 'border-green-200' : 'border-red-200'}`}>
-          <div className={`px-5 py-4 ${sufficient ? 'bg-gradient-to-r from-green-500 to-emerald-500' : 'bg-gradient-to-r from-red-500 to-orange-500'}`}>
-            <div className="flex items-center space-x-3">
-              <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center">
-                <Wallet className="w-6 h-6 text-white" />
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+          {/* 头部 */}
+          <div className="px-4 py-3 bg-slate-50 border-b border-slate-100">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <div className={`w-6 h-6 rounded-lg flex items-center justify-center ${sufficient ? 'bg-emerald-500' : 'bg-red-500'}`}>
+                  <Wallet className="w-3 h-3 text-white" />
+                </div>
+                <span className="text-sm font-semibold text-slate-700">额度校验</span>
               </div>
-              <div>
-                <h3 className="text-white font-bold text-lg">开票余额检验</h3>
-                <p className="text-white/80 text-sm">
-                  {sufficient ? '✓ 余额充足，可以开票' : '✗ 余额不足'}
-                </p>
+              <div className={`flex items-center space-x-1.5 px-2 py-1 rounded-md text-xs font-medium ${
+                sufficient ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-600'
+              }`}>
+                {sufficient ? <Check className="w-3 h-3" /> : <X className="w-3 h-3" />}
+                <span>{sufficient ? '额度充足' : '额度不足'}</span>
               </div>
             </div>
           </div>
           
-          <div className="bg-white p-5">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="bg-gray-50 rounded-xl p-4">
-                <div className="text-xs text-gray-500 mb-1">当前余额</div>
-                <div className="text-xl font-bold text-gray-800">¥{balance.toLocaleString()}</div>
+          {/* 数据区 */}
+          <div className="p-4">
+            {/* 额度可视化 */}
+            <div className="mb-4">
+              <div className="flex items-center justify-between text-xs text-slate-500 mb-2">
+                <span>已用额度</span>
+                <span className="font-mono">{usagePercent.toFixed(1)}%</span>
               </div>
-              <div className={`rounded-xl p-4 ${sufficient ? 'bg-green-50' : 'bg-red-50'}`}>
-                <div className="text-xs text-gray-500 mb-1">本次开票</div>
-                <div className={`text-xl font-bold ${sufficient ? 'text-green-600' : 'text-red-600'}`}>
+              <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                <div 
+                  className={`h-full rounded-full transition-all ${sufficient ? 'bg-emerald-500' : 'bg-red-500'}`}
+                  style={{ width: `${usagePercent}%` }}
+                ></div>
+              </div>
+            </div>
+            
+            {/* 数值对比 */}
+            <div className="grid grid-cols-2 gap-3 mb-3">
+              <div className="bg-slate-50 rounded-lg p-3">
+                <div className="text-xs text-slate-400 mb-1">可用额度</div>
+                <div className="text-base font-bold text-slate-700 font-mono">¥{balance.toLocaleString()}</div>
+              </div>
+              <div className={`rounded-lg p-3 ${sufficient ? 'bg-emerald-50' : 'bg-red-50'}`}>
+                <div className={`text-xs mb-1 ${sufficient ? 'text-emerald-600' : 'text-red-600'}`}>本次金额</div>
+                <div className={`text-base font-bold font-mono ${sufficient ? 'text-emerald-700' : 'text-red-600'}`}>
                   ¥{required.toLocaleString()}
                 </div>
               </div>
             </div>
             
+            {/* 剩余额度 */}
             {sufficient && (
-              <div className="mt-4 flex items-center text-sm text-green-600 bg-green-50 rounded-lg px-3 py-2">
-                <Check className="w-4 h-4 mr-2" />
-                开票后剩余：¥{(balance - required).toLocaleString()}
+              <div className="flex items-center justify-between py-2 px-3 bg-slate-50 rounded-lg text-sm">
+                <span className="text-slate-500">开票后剩余</span>
+                <span className="font-semibold text-slate-700 font-mono">¥{remaining.toLocaleString()}</span>
               </div>
             )}
           </div>
@@ -498,73 +567,76 @@ export default function ChatInterface({ onInvoiceUpdate, initialData, companyInf
     );
   };
 
-  // 渲染确认开票卡片
+  // 渲染确认开票卡片 - 统一设计语言
   const renderInvoiceConfirmCard = (data: string) => {
     const invoice: ParsedInvoice = JSON.parse(data);
     
     return (
       <div className="w-full max-w-md animate-slideUp">
-        <div className="rounded-2xl overflow-hidden border-2 border-blue-200 shadow-lg">
-          <div className="bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 px-5 py-4">
-            <div className="flex items-center space-x-3">
-              <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center">
-                <FileText className="w-6 h-6 text-white" />
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+          {/* 头部 */}
+          <div className="px-4 py-3 bg-slate-800 border-b border-slate-700">
+            <div className="flex items-center space-x-2">
+              <div className="w-6 h-6 bg-amber-400 rounded-lg flex items-center justify-center">
+                <FileText className="w-3.5 h-3.5 text-slate-800" />
               </div>
-              <div>
-                <h3 className="text-white font-bold text-lg">确认开票</h3>
-                <p className="text-white/80 text-sm">请确认是否立即开具发票</p>
-              </div>
+              <span className="text-sm font-semibold text-white">确认开票</span>
             </div>
           </div>
           
-          <div className="bg-white p-5">
-            <div className="space-y-3 mb-5">
-              {/* 销售方信息 */}
-              {companyInfo && (
-                <div className="bg-blue-50 rounded-lg p-3 mb-3">
-                  <div className="text-xs text-blue-600 mb-1 flex items-center">
-                    <Building2 className="w-3 h-3 mr-1" />
-                    销售方
-                  </div>
-                  <div className="font-medium text-slate-800 text-sm">{companyInfo.name}</div>
-                  <div className="text-xs text-slate-500 font-mono mt-0.5">{companyInfo.creditCode}</div>
-                </div>
-              )}
-              <div className="flex justify-between items-center py-2 border-b border-gray-100">
-                <span className="text-gray-500 text-sm">购买方</span>
-                <span className="font-medium text-gray-800">{invoice.customerInfo?.name || invoice.customerName}</span>
+          {/* 信息区 */}
+          <div className="p-4">
+            {/* 双方信息 */}
+            <div className="grid grid-cols-2 gap-3 mb-4">
+              {/* 销售方 */}
+              <div className="bg-slate-50 rounded-lg p-3">
+                <div className="text-xs text-slate-400 mb-1">销售方</div>
+                <div className="text-sm font-medium text-slate-700 truncate">{companyInfo?.name || '-'}</div>
+                <div className="text-xs text-slate-400 font-mono mt-0.5 truncate">{companyInfo?.creditCode || ''}</div>
               </div>
-              <div className="flex justify-between items-center py-2 border-b border-gray-100">
-                <span className="text-gray-500 text-sm">商品名称</span>
-                <span className="font-medium text-gray-800">{invoice.productName || invoice.productType}</span>
+              {/* 购买方 */}
+              <div className="bg-slate-50 rounded-lg p-3">
+                <div className="text-xs text-slate-400 mb-1">购买方</div>
+                <div className="text-sm font-medium text-slate-700 truncate">{invoice.customerInfo?.name || invoice.customerName}</div>
+                {invoice.customerInfo?.taxNumber && (
+                  <div className="text-xs text-slate-400 font-mono mt-0.5 truncate">{invoice.customerInfo.taxNumber}</div>
+                )}
               </div>
-              <div className="flex justify-between items-center py-2 border-b border-gray-100">
-                <span className="text-gray-500 text-sm">价税合计</span>
-                <span className="font-bold text-xl text-blue-600">
+            </div>
+            
+            {/* 商品和金额 */}
+            <div className="space-y-2 mb-4">
+              <div className="flex items-center justify-between py-2">
+                <span className="text-xs text-slate-400">商品/服务</span>
+                <span className="text-sm text-slate-700">{invoice.productName || invoice.productType}</span>
+              </div>
+              <div className="flex items-center justify-between py-3 bg-amber-50 rounded-lg px-3 border border-amber-100">
+                <span className="text-sm text-slate-600">价税合计</span>
+                <span className="font-bold text-lg text-slate-800 font-mono">
                   ¥{(invoice.totalAmount || invoice.amount || 0).toLocaleString()}
                 </span>
               </div>
             </div>
             
+            {/* 按钮区 */}
             <div className="flex space-x-3">
               <button
                 onClick={handleCancelInvoice}
                 disabled={isConfirming}
-                className="flex-1 px-4 py-3 border-2 border-gray-200 text-gray-600 rounded-xl hover:bg-gray-50 transition-colors font-medium disabled:opacity-50"
+                className="flex-1 px-4 py-2.5 border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 transition-colors font-medium disabled:opacity-50 text-sm"
               >
-                <X className="w-4 h-4 inline mr-2" />
                 取消
               </button>
               <button
                 onClick={handleConfirmInvoice}
                 disabled={isConfirming}
-                className="flex-1 px-4 py-3 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-xl hover:from-blue-600 hover:to-purple-700 transition-all font-medium shadow-lg disabled:opacity-50 flex items-center justify-center"
+                className="flex-1 px-4 py-2.5 bg-slate-800 text-white rounded-lg hover:bg-slate-700 transition-all font-medium disabled:opacity-50 flex items-center justify-center text-sm"
               >
                 {isConfirming ? (
-                  <Loader2 className="w-5 h-5 animate-spin" />
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
                 ) : (
                   <>
-                    <Check className="w-4 h-4 mr-2" />
+                    <Check className="w-4 h-4 mr-1.5" />
                     确认开票
                   </>
                 )}
@@ -576,65 +648,58 @@ export default function ChatInterface({ onInvoiceUpdate, initialData, companyInf
     );
   };
 
-  // 渲染开票成功卡片
+  // 渲染开票成功卡片 - 统一设计语言
   const renderInvoiceSuccessCard = (data: string) => {
     const { invoice, pdf } = JSON.parse(data);
     
     return (
       <div className="w-full max-w-md animate-slideUp">
-        <div className="rounded-2xl overflow-hidden border-2 border-green-200 shadow-lg">
+        <div className="bg-white rounded-xl border border-emerald-200 shadow-sm overflow-hidden">
           {/* 成功头部 */}
-          <div className="bg-gradient-to-r from-green-500 to-emerald-500 px-5 py-6 text-center">
-            <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center mx-auto mb-3 shadow-lg">
-              <Check className="w-8 h-8 text-green-500" />
+          <div className="bg-emerald-500 px-4 py-4 text-center">
+            <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center mx-auto mb-2">
+              <Check className="w-5 h-5 text-emerald-500" />
             </div>
-            <h3 className="text-white font-bold text-xl mb-1">🎉 开票成功！</h3>
-            <p className="text-white/80 text-sm">电子发票已生成</p>
+            <h3 className="text-white font-semibold">开票成功</h3>
+            <p className="text-emerald-100 text-xs mt-0.5">电子发票已生成</p>
           </div>
           
-            {/* 发票信息 */}
-          <div className="bg-white p-5">
-            <div className="bg-gray-50 rounded-xl p-4 mb-4">
-              <div className="flex items-center justify-between mb-3">
-                <span className="text-gray-500 text-sm">发票号码</span>
-                <span className="font-mono font-bold text-gray-800">{pdf.invoiceNumber}</span>
-              </div>
-              {companyInfo && (
-                <div className="flex items-center justify-between mb-3">
-                  <span className="text-gray-500 text-sm">销售方</span>
-                  <span className="font-medium text-gray-800 text-xs">{companyInfo.name}</span>
-                </div>
-              )}
-              <div className="flex items-center justify-between mb-3">
-                <span className="text-gray-500 text-sm">购买方</span>
-                <span className="font-medium text-gray-800">{invoice.customerInfo?.name || invoice.customerName}</span>
-              </div>
-              <div className="flex items-center justify-between mb-3">
-                <span className="text-gray-500 text-sm">开票金额</span>
-                <span className="font-bold text-green-600">¥{(invoice.totalAmount || invoice.amount || 0).toLocaleString()}</span>
+          {/* 发票信息 */}
+          <div className="p-4">
+            <div className="bg-slate-50 rounded-lg p-3 mb-4 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-slate-400">发票号码</span>
+                <span className="font-mono font-semibold text-slate-700 text-sm">{pdf.invoiceNumber}</span>
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-gray-500 text-sm">开票时间</span>
-                <span className="text-gray-600">{new Date(pdf.createTime).toLocaleString('zh-CN')}</span>
+                <span className="text-xs text-slate-400">购买方</span>
+                <span className="text-sm text-slate-700">{invoice.customerInfo?.name || invoice.customerName}</span>
+              </div>
+              <div className="flex items-center justify-between pt-2 border-t border-slate-200">
+                <span className="text-sm text-slate-600">开票金额</span>
+                <span className="font-bold text-emerald-600 text-lg font-mono">¥{(invoice.totalAmount || invoice.amount || 0).toLocaleString()}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-slate-400">开票时间</span>
+                <span className="text-xs text-slate-500">{new Date(pdf.createTime).toLocaleString('zh-CN')}</span>
               </div>
             </div>
             
             {/* 下载按钮 */}
             <button
               onClick={() => {
-                // 模拟下载PDF
                 alert(`正在下载发票：${pdf.invoiceNumber}.pdf`);
               }}
-              className="w-full px-4 py-4 bg-gradient-to-r from-green-500 to-emerald-500 text-white rounded-xl hover:from-green-600 hover:to-emerald-600 transition-all font-medium shadow-lg flex items-center justify-center space-x-2"
+              className="w-full px-4 py-2.5 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 transition-all font-medium flex items-center justify-center space-x-2 text-sm"
             >
-              <Download className="w-5 h-5" />
-              <span>下载发票 PDF</span>
+              <Download className="w-4 h-4" />
+              <span>下载电子发票</span>
             </button>
             
-            <div className="mt-3 text-center">
-              <button className="text-sm text-gray-500 hover:text-gray-700">
-                发送至邮箱 →
-              </button>
+            <div className="mt-3 flex items-center justify-center space-x-4 text-xs text-slate-400">
+              <button className="hover:text-slate-600 transition-colors">发送邮箱</button>
+              <span className="w-0.5 h-0.5 bg-slate-300 rounded-full"></span>
+              <button className="hover:text-slate-600 transition-colors">打印发票</button>
             </div>
           </div>
         </div>
@@ -642,140 +707,412 @@ export default function ChatInterface({ onInvoiceUpdate, initialData, companyInf
     );
   };
 
-  // 渲染风险预警卡片
+  // 渲染风险预警卡片 - 统一设计语言
   const renderRiskCard = (risksData: string) => {
     const risks: RiskWarning[] = JSON.parse(risksData);
 
     return (
       <div className="w-full max-w-md animate-slideUp">
-        <div className="bg-gradient-to-r from-orange-500 to-red-500 rounded-t-2xl px-5 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-3">
-              <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center">
-                <Shield className="w-5 h-5 text-white" />
+        <div className="bg-white rounded-xl border border-amber-200 shadow-sm overflow-hidden">
+          {/* 头部 */}
+          <div className="px-4 py-3 bg-amber-50 border-b border-amber-100">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <div className="w-6 h-6 bg-amber-500 rounded-lg flex items-center justify-center">
+                  <Shield className="w-3 h-3 text-white" />
+                </div>
+                <span className="text-sm font-semibold text-amber-800">风险提示</span>
               </div>
-              <div>
-                <h3 className="text-white font-bold text-lg">风险预警中心</h3>
-                <p className="text-white/80 text-xs">检测到 {risks.length} 项需要关注</p>
-              </div>
+              <span className="text-xs text-amber-600 bg-amber-100 px-2 py-0.5 rounded">{risks.length} 项</span>
             </div>
           </div>
-        </div>
-        
-        <div className="bg-white border-2 border-t-0 border-orange-200 rounded-b-2xl divide-y divide-orange-100">
-          {risks.map((risk) => (
-            <div key={risk.id} className="p-4 hover:bg-orange-50/50 transition-colors">
-              <div className="flex items-start space-x-3">
-                <div className={`flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center ${
-                  risk.level === 'high' ? 'bg-red-100' :
-                  risk.level === 'medium' ? 'bg-orange-100' : 'bg-yellow-100'
-                }`}>
-                  {risk.level === 'high' ? (
-                    <AlertTriangle className="w-4 h-4 text-red-600" />
-                  ) : risk.level === 'medium' ? (
-                    <AlertCircle className="w-4 h-4 text-orange-600" />
-                  ) : (
-                    <Bell className="w-4 h-4 text-yellow-600" />
-                  )}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center space-x-2 mb-1">
-                    <span className={`text-sm font-bold ${
-                      risk.level === 'high' ? 'text-red-700' :
-                      risk.level === 'medium' ? 'text-orange-700' : 'text-yellow-700'
-                    }`}>
-                      {risk.title}
-                    </span>
-                    <span className={`px-1.5 py-0.5 text-xs rounded ${
-                      risk.level === 'high' ? 'bg-red-100 text-red-700' :
-                      risk.level === 'medium' ? 'bg-orange-100 text-orange-700' : 'bg-yellow-100 text-yellow-700'
-                    }`}>
-                      {risk.level === 'high' ? '高风险' : risk.level === 'medium' ? '中风险' : '提醒'}
-                    </span>
+          
+          {/* 风险列表 */}
+          <div className="divide-y divide-slate-100">
+            {risks.map((risk) => (
+              <div key={risk.id} className="p-3">
+                <div className="flex items-start space-x-2.5">
+                  <div className={`flex-shrink-0 w-5 h-5 rounded flex items-center justify-center mt-0.5 ${
+                    risk.level === 'high' ? 'bg-red-100' :
+                    risk.level === 'medium' ? 'bg-amber-100' : 'bg-slate-100'
+                  }`}>
+                    {risk.level === 'high' ? (
+                      <AlertTriangle className="w-3 h-3 text-red-500" />
+                    ) : risk.level === 'medium' ? (
+                      <AlertCircle className="w-3 h-3 text-amber-500" />
+                    ) : (
+                      <Bell className="w-3 h-3 text-slate-400" />
+                    )}
                   </div>
-                  <p className="text-sm text-gray-600 mb-2">{risk.message}</p>
-                  <div className="flex items-center space-x-2 text-xs text-gray-500">
-                    <Sparkles className="w-3 h-3" />
-                    <span>{risk.suggestion}</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center space-x-2 mb-0.5">
+                      <span className="text-sm font-medium text-slate-700">{risk.title}</span>
+                      <span className={`px-1.5 py-0.5 text-xs rounded ${
+                        risk.level === 'high' ? 'bg-red-50 text-red-600' :
+                        risk.level === 'medium' ? 'bg-amber-50 text-amber-600' : 'bg-slate-50 text-slate-500'
+                      }`}>
+                        {risk.level === 'high' ? '高风险' : risk.level === 'medium' ? '中风险' : '低风险'}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-500 mb-1.5">{risk.message}</p>
+                    <p className="text-xs text-slate-400">{risk.suggestion}</p>
                   </div>
                 </div>
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       </div>
     );
   };
 
-  // 渲染智能推荐卡片
+  // 渲染智能推荐卡片 - 统一设计语言
   const renderRecommendationCard = (recsData: string) => {
     const recommendations: SmartRecommendation[] = JSON.parse(recsData);
 
     return (
       <div className="w-full max-w-md animate-slideUp">
-        <div className="bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 rounded-t-2xl px-5 py-4">
-          <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center">
-              <Sparkles className="w-5 h-5 text-white" />
-            </div>
-            <div>
-              <h3 className="text-white font-bold text-lg">智能推荐</h3>
-              <p className="text-white/80 text-xs">为您精选 {recommendations.length} 条建议</p>
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+          {/* 头部 */}
+          <div className="px-4 py-3 bg-slate-50 border-b border-slate-100">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <div className="w-6 h-6 bg-slate-700 rounded-lg flex items-center justify-center">
+                  <Sparkles className="w-3 h-3 text-amber-400" />
+                </div>
+                <span className="text-sm font-semibold text-slate-700">智能建议</span>
+              </div>
+              <span className="text-xs text-slate-500">{recommendations.length} 条</span>
             </div>
           </div>
-        </div>
-        
-        <div className="bg-white border-2 border-t-0 border-blue-200 rounded-b-2xl">
-          {recommendations.slice(0, 3).map((rec, index) => (
-            <div 
-              key={rec.id}
-              className={`p-4 hover:bg-blue-50/50 transition-colors cursor-pointer group ${
-                index < Math.min(recommendations.length, 3) - 1 ? 'border-b border-blue-100' : ''
-              }`}
-            >
-              <div className="flex items-start space-x-3">
-                <div className="flex-shrink-0 w-10 h-10 bg-blue-100 rounded-xl flex items-center justify-center">
-                  <span className="text-xl">{rec.icon || '💡'}</span>
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-sm font-bold text-gray-800">{rec.title}</span>
-                    <ChevronRight className="w-4 h-4 text-gray-400 group-hover:text-blue-500 group-hover:translate-x-1 transition-all" />
+          
+          {/* 推荐列表 */}
+          <div className="divide-y divide-slate-100">
+            {recommendations.slice(0, 3).map((rec) => (
+              <div 
+                key={rec.id}
+                className="p-3 hover:bg-slate-50 transition-colors cursor-pointer group"
+              >
+                <div className="flex items-start space-x-2.5">
+                  <div className="flex-shrink-0 w-6 h-6 bg-slate-100 rounded flex items-center justify-center mt-0.5">
+                    <Sparkles className="w-3 h-3 text-slate-500" />
                   </div>
-                  <p className="text-sm text-gray-600">{rec.content}</p>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between mb-0.5">
+                      <span className="text-sm font-medium text-slate-700">{rec.title}</span>
+                      <ChevronRight className="w-4 h-4 text-slate-300 group-hover:text-slate-500 group-hover:translate-x-0.5 transition-all" />
+                    </div>
+                    <p className="text-xs text-slate-500">{rec.content}</p>
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       </div>
     );
   };
 
-  return (
-    <div className="bg-white rounded-2xl shadow-xl border border-gray-200 flex flex-col h-[calc(100vh-240px)] min-h-[600px] relative">
-      {/* Chat Header */}
-      <div className="px-6 py-4 border-b border-gray-200 bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 rounded-t-2xl">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-lg font-bold text-white flex items-center">
-              <Sparkles className="w-5 h-5 mr-2" />
-              AI智能开票助手
-            </h2>
-            <p className="text-sm text-white/80 mt-0.5">智能识别 · 风险预警 · 活动推送</p>
+  // 渲染缺失信息提示卡片 - 统一设计语言
+  const renderMissingInfoCard = (data: string) => {
+    const { missingFields, confidence } = JSON.parse(data);
+    
+    return (
+      <div className="w-full max-w-md animate-slideUp">
+        <div className="bg-white rounded-xl border border-amber-200 shadow-sm overflow-hidden">
+          {/* 头部 */}
+          <div className="px-4 py-3 bg-amber-50 border-b border-amber-100">
+            <div className="flex items-center space-x-2">
+              <div className="w-6 h-6 bg-amber-500 rounded-lg flex items-center justify-center">
+                <AlertCircle className="w-3.5 h-3.5 text-white" />
+              </div>
+              <span className="text-sm font-semibold text-amber-800">信息不完整</span>
+            </div>
           </div>
           
-          <div className="flex items-center gap-2">
-            <div className="flex items-center px-3 py-1.5 bg-white/20 rounded-lg">
-              <Wallet className="w-4 h-4 text-white mr-1.5" />
-              <span className="text-white text-xs font-medium">余额: ¥{invoiceBalance.toLocaleString()}</span>
+          {/* 缺失字段列表 */}
+          <div className="p-4">
+            <p className="text-xs text-slate-500 mb-3">请补充以下信息后重新发送</p>
+            
+            <div className="space-y-2 mb-4">
+              {missingFields.map((field: string, index: number) => (
+                <div key={index} className="flex items-center space-x-2 py-2 px-3 bg-amber-50 rounded-lg border border-amber-100">
+                  <X className="w-3.5 h-3.5 text-amber-500" />
+                  <span className="text-sm text-amber-800">{field}</span>
+                  <span className="text-xs text-amber-500 ml-auto px-1.5 py-0.5 bg-amber-100 rounded">必填</span>
+                </div>
+              ))}
+            </div>
+            
+            {/* 提示 */}
+            <div className="bg-slate-50 rounded-lg p-3 border border-slate-100">
+              <p className="text-xs text-slate-500 mb-1">输入示例</p>
+              <p className="text-xs text-slate-600">
+                给<span className="text-amber-600 font-medium">腾讯</span>开<span className="text-amber-600 font-medium">软件服务费</span>，金额<span className="text-amber-600 font-medium">5万元</span>
+              </p>
+            </div>
+            
+            {confidence !== undefined && (
+              <div className="mt-3 text-center text-xs text-slate-400">
+                解析置信度 {confidence}%
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // 渲染AI解析结果卡片 - 区分必填和可选字段
+  const renderAIParseResultCard = (data: string) => {
+    const result: ParseResultDisplay = JSON.parse(data);
+    const hasMissingRequired = result.missingRequired && result.missingRequired.length > 0;
+    
+    return (
+      <div className="w-full max-w-md animate-slideUp">
+        <div className={`bg-white rounded-xl border shadow-sm overflow-hidden ${
+          hasMissingRequired ? 'border-red-200' : 'border-slate-200'
+        }`}>
+          {/* 头部 */}
+          <div className={`px-4 py-3 border-b ${
+            hasMissingRequired 
+              ? 'bg-red-50 border-red-100' 
+              : 'bg-slate-50 border-slate-100'
+          }`}>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <div className={`w-6 h-6 rounded-lg flex items-center justify-center ${
+                  hasMissingRequired ? 'bg-red-500' : 'bg-slate-700'
+                }`}>
+                  {hasMissingRequired 
+                    ? <AlertCircle className="w-3.5 h-3.5 text-white" />
+                    : <Sparkles className="w-3 h-3 text-amber-400" />
+                  }
+                </div>
+                <span className={`text-sm font-semibold ${hasMissingRequired ? 'text-red-700' : 'text-slate-700'}`}>
+                  {hasMissingRequired ? '信息不完整' : 'AI 解析结果'}
+                </span>
+              </div>
+              <div className="flex items-center space-x-1.5">
+                <div className={`w-1.5 h-1.5 rounded-full ${
+                  result.canProceed ? 'bg-emerald-500' : 'bg-red-500'
+                }`}></div>
+                <span className={`text-xs ${hasMissingRequired ? 'text-red-500' : 'text-slate-500'}`}>
+                  置信度 {result.confidence}%
+                </span>
+              </div>
+            </div>
+          </div>
+          
+          {/* 内容 */}
+          <div className="p-4 space-y-3">
+            {/* 发票类型 */}
+            <div className="flex items-center justify-between py-2 px-3 bg-slate-50 rounded-lg">
+              <span className="text-xs text-slate-500">发票类型</span>
+              <span className="text-sm font-medium text-slate-700">{result.invoiceType}</span>
+            </div>
+            
+            {/* 识别到的信息 */}
+            <div className="space-y-2">
+              {result.customerName ? (
+                <div className="flex items-center justify-between py-1.5">
+                  <span className="text-xs text-slate-400">客户名称</span>
+                  <span className="text-sm text-slate-700">{result.customerName}</span>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between py-1.5">
+                  <span className="text-xs text-red-400">客户名称</span>
+                  <span className="text-xs text-red-500 bg-red-50 px-2 py-0.5 rounded">未识别 · 必填</span>
+                </div>
+              )}
+              
+              {result.productType ? (
+                <div className="flex items-center justify-between py-1.5">
+                  <span className="text-xs text-slate-400">商品/服务</span>
+                  <span className="text-sm text-slate-700">{result.productType}</span>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between py-1.5">
+                  <span className="text-xs text-red-400">商品/服务</span>
+                  <span className="text-xs text-red-500 bg-red-50 px-2 py-0.5 rounded">未识别 · 必填</span>
+                </div>
+              )}
+              
+              {result.amount !== undefined ? (
+                <div className="flex items-center justify-between py-1.5">
+                  <span className="text-xs text-slate-400">金额</span>
+                  <span className="text-sm font-semibold text-slate-800">¥{result.amount.toLocaleString()}</span>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between py-1.5">
+                  <span className="text-xs text-red-400">金额</span>
+                  <span className="text-xs text-red-500 bg-red-50 px-2 py-0.5 rounded">未识别 · 必填</span>
+                </div>
+              )}
+              
+              {/* 可选字段 - 数量 */}
+              {result.quantity !== undefined ? (
+                <div className="flex items-center justify-between py-1.5">
+                  <span className="text-xs text-slate-400">数量</span>
+                  <span className="text-sm text-slate-700">{result.quantity}</span>
+                </div>
+              ) : result.canProceed && (
+                <div className="flex items-center justify-between py-1.5">
+                  <span className="text-xs text-slate-300">数量</span>
+                  <span className="text-xs text-slate-400">默认 1</span>
+                </div>
+              )}
+              
+              {/* 可选字段 - 单价 */}
+              {result.unitPrice !== undefined ? (
+                <div className="flex items-center justify-between py-1.5">
+                  <span className="text-xs text-slate-400">单价</span>
+                  <span className="text-sm text-slate-700">¥{result.unitPrice.toLocaleString()}</span>
+                </div>
+              ) : result.canProceed && result.amount && (
+                <div className="flex items-center justify-between py-1.5">
+                  <span className="text-xs text-slate-300">单价</span>
+                  <span className="text-xs text-slate-400">默认 ¥{result.amount.toLocaleString()}</span>
+                </div>
+              )}
+            </div>
+            
+            {/* 必填信息缺失提示 */}
+            {hasMissingRequired && (
+              <div className="mt-3 pt-3 border-t border-red-100">
+                <div className="bg-red-50 rounded-lg p-3">
+                  <p className="text-xs text-red-600 font-medium mb-2">请补充以下必填信息后重新发送：</p>
+                  <div className="flex flex-wrap gap-2">
+                    {result.missingRequired.map((field, i) => (
+                      <span key={i} className="text-xs text-red-700 bg-red-100 px-2 py-1 rounded">
+                        {field}
+                      </span>
+                    ))}
+                  </div>
+                  <p className="text-xs text-red-400 mt-2">
+                    示例："给<span className="text-red-600">腾讯</span>开<span className="text-red-600">软件服务费</span>，金额<span className="text-red-600">5万元</span>"
+                  </p>
+                </div>
+              </div>
+            )}
+            
+            {/* 可继续流程的确认 */}
+            {result.canProceed && (
+              <div className="mt-2 pt-2 border-t border-slate-100">
+                <div className="flex items-center space-x-2 text-xs text-emerald-600">
+                  <CheckCircle className="w-3.5 h-3.5" />
+                  <span>必填信息完整，正在继续处理...</span>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // 渲染解析完成卡片 - 统一专业设计
+  const renderParseCompleteCard = (data: string) => {
+    const invoice: ParsedInvoice = JSON.parse(data);
+    
+    return (
+      <div className="w-full max-w-md animate-slideUp">
+        <div className="bg-white rounded-xl border border-emerald-200 shadow-sm overflow-hidden">
+          {/* 头部 */}
+          <div className="px-4 py-3 bg-emerald-50 border-b border-emerald-100">
+            <div className="flex items-center space-x-2">
+              <div className="w-6 h-6 bg-emerald-500 rounded-lg flex items-center justify-center">
+                <CheckCircle className="w-3.5 h-3.5 text-white" />
+              </div>
+              <span className="text-sm font-semibold text-emerald-700">信息解析完成</span>
+            </div>
+          </div>
+          
+          {/* 内容 */}
+          <div className="p-4">
+            {/* 发票类型标签 */}
+            <div className="inline-flex items-center px-2.5 py-1 bg-slate-100 rounded-md text-xs font-medium text-slate-600 mb-3">
+              {invoice.invoiceType === '专票' ? '增值税专用发票' : '增值税普通发票'}
+            </div>
+            
+            {/* 收票方 */}
+            <div className="mb-4">
+              <div className="text-xs text-slate-400 mb-1.5">收票方信息</div>
+              <div className="bg-slate-50 rounded-lg p-3">
+                <div className="text-sm font-medium text-slate-800">{invoice.customerInfo?.name || invoice.customerName}</div>
+                {invoice.customerInfo?.taxNumber && (
+                  <div className="text-xs text-slate-500 font-mono mt-1">{invoice.customerInfo.taxNumber}</div>
+                )}
+              </div>
+            </div>
+            
+            {/* 商品信息 */}
+            <div className="mb-4">
+              <div className="text-xs text-slate-400 mb-1.5">商品/服务</div>
+              <div className="flex items-center justify-between py-2">
+                <span className="text-sm text-slate-700">{invoice.productName || invoice.productType}</span>
+                {invoice.quantity && <span className="text-xs text-slate-500">x{invoice.quantity}</span>}
+              </div>
+            </div>
+            
+            {/* 金额汇总 */}
+            <div className="bg-amber-50 rounded-lg p-3 border border-amber-100">
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-slate-600">价税合计</span>
+                <span className="text-lg font-bold text-slate-800 font-mono">
+                  ¥{(invoice.totalAmount || invoice.amount || 0).toLocaleString()}
+                </span>
+              </div>
+              {invoice.taxRate && (
+                <div className="flex items-center justify-between mt-1.5 pt-1.5 border-t border-amber-200/50">
+                  <span className="text-xs text-slate-500">税率 {invoice.taxRate}%</span>
+                  {invoice.taxAmount && (
+                    <span className="text-xs text-slate-500">税额 ¥{invoice.taxAmount.toLocaleString()}</span>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </div>
       </div>
+    );
+  };
 
-      {/* Messages Area */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-4">
+  // 渲染发票预览卡片 - 使用仿真电子发票组件
+  const renderInvoicePreviewCard = (data: string) => {
+    const invoice: ParsedInvoice = JSON.parse(data);
+    return <InvoicePreviewCard invoice={invoice} companyInfo={companyInfo} />;
+  };
+
+  return (
+    <div className="bg-white rounded-2xl shadow-xl border border-slate-200/60 flex flex-col h-[calc(100vh-120px)] min-h-[500px] relative overflow-hidden">
+      {/* Chat Header - 简洁专业风格 */}
+      <div className="relative px-5 py-3.5 border-b border-slate-100 bg-white">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-3">
+            <div className="w-9 h-9 bg-gradient-to-br from-slate-700 to-slate-800 rounded-xl flex items-center justify-center shadow-md">
+              <Sparkles className="w-4 h-4 text-amber-400" />
+            </div>
+            <div>
+              <h2 className="text-sm font-bold text-slate-800 flex items-center">
+                智能开票助手
+                <span className="ml-2 px-1.5 py-0.5 bg-amber-100 text-amber-700 text-xs rounded font-semibold">AI</span>
+              </h2>
+              <p className="text-xs text-slate-400">自然语言 · 智能解析 · 一键开票</p>
+            </div>
+          </div>
+          
+          {/* 开票余额指示器 - 简洁版 */}
+          <div className="flex items-center px-3 py-1.5 bg-slate-50 rounded-lg border border-slate-200">
+            <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full mr-2"></div>
+            <Wallet className="w-3.5 h-3.5 text-slate-400 mr-1.5" />
+            <span className="text-slate-600 text-xs font-semibold">¥{invoiceBalance.toLocaleString()}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Messages Area - 简洁优雅 */}
+      <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4 bg-slate-50/30">
         {messages.map((message) => (
           <div
             key={message.id}
@@ -823,47 +1160,88 @@ export default function ChatInterface({ onInvoiceUpdate, initialData, companyInf
               </div>
             )}
             
-            {/* 普通消息 */}
-            {!['risk', 'recommendation', 'balance-check', 'invoice-confirm', 'invoice-success'].includes(message.type || '') && (
-              <div
-                className={`max-w-[85%] rounded-2xl px-4 py-3 ${
-                  message.role === 'user'
-                    ? 'bg-gradient-to-r from-blue-500 to-purple-600 text-white'
-                    : message.type === 'error'
-                    ? 'bg-red-50 border-2 border-red-400 text-red-800'
-                    : message.type === 'success'
-                    ? 'bg-green-50 border border-green-200 text-green-900'
-                    : message.type === 'processing'
-                    ? 'bg-yellow-50 border border-yellow-200 text-yellow-900'
-                    : 'bg-gray-100 text-gray-800'
-                }`}
-              >
-                {message.type === 'error' && (
-                  <div className="flex items-center mb-2">
-                    <AlertCircle className="w-5 h-5 mr-2 text-red-500" />
-                    <span className="font-semibold">校验失败</span>
-                  </div>
-                )}
-                {message.type === 'success' && (
-                  <div className="flex items-center mb-2">
-                    <CheckCircle className="w-5 h-5 mr-2 text-green-500" />
-                    <span className="font-semibold">解析成功</span>
+            {/* 缺失信息提示卡片 */}
+            {message.type === 'missing-info' && (
+              <div className="w-full flex justify-start">
+                {renderMissingInfoCard(message.content)}
+              </div>
+            )}
+            
+            {/* 发票预览卡片 */}
+            {message.type === 'invoice-preview' && (
+              <div className="w-full flex justify-start">
+                {renderInvoicePreviewCard(message.content)}
+              </div>
+            )}
+            
+            {/* AI解析结果卡片 */}
+            {message.type === 'ai-parse-result' && (
+              <div className="w-full flex justify-start">
+                {renderAIParseResultCard(message.content)}
+              </div>
+            )}
+            
+            {/* 解析完成卡片 */}
+            {message.type === 'parse-complete' && (
+              <div className="w-full flex justify-start">
+                {renderParseCompleteCard(message.content)}
+              </div>
+            )}
+            
+            {/* 普通消息 - 专业财务风格 */}
+            {!['risk', 'recommendation', 'balance-check', 'invoice-confirm', 'invoice-success', 'seller-info', 'missing-info', 'invoice-preview', 'ai-parse-result', 'parse-complete'].includes(message.type || '') && (
+              <div className={`max-w-[80%] ${message.role === 'user' ? '' : 'flex items-end space-x-2'}`}>
+                {/* AI头像 - 仅非用户消息显示 */}
+                {message.role !== 'user' && (
+                  <div className="flex-shrink-0 w-8 h-8 bg-gradient-to-br from-slate-700 to-slate-800 rounded-xl flex items-center justify-center shadow-sm mb-1">
+                    <Sparkles className="w-4 h-4 text-amber-400" />
                   </div>
                 )}
                 
-                {message.type === 'processing' ? (
-                  <div className="flex items-center">
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    <span>{message.content}</span>
-                  </div>
-                ) : (
-                  <div className="whitespace-pre-wrap text-sm leading-relaxed">
-                    {message.content}
-                  </div>
-                )}
+                <div
+                  className={`rounded-2xl px-4 py-3 shadow-sm ${
+                    message.role === 'user'
+                      ? 'bg-gradient-to-br from-slate-700 to-slate-800 text-white rounded-tr-md'
+                      : message.type === 'error'
+                      ? 'bg-red-50 border border-red-200 text-red-800 rounded-tl-md'
+                      : message.type === 'success'
+                      ? 'bg-gradient-to-br from-emerald-50 to-green-50 border border-emerald-200 text-emerald-900 rounded-tl-md'
+                      : message.type === 'processing'
+                      ? 'bg-gradient-to-br from-amber-50 to-yellow-50 border border-amber-200 text-amber-900 rounded-tl-md'
+                      : 'bg-white border border-slate-200 text-slate-700 rounded-tl-md'
+                  }`}
+                >
+                  {message.type === 'error' && (
+                    <div className="flex items-center mb-2 pb-2 border-b border-red-200">
+                      <div className="w-6 h-6 bg-red-100 rounded-lg flex items-center justify-center mr-2">
+                        <AlertCircle className="w-4 h-4 text-red-500" />
+                      </div>
+                      <span className="font-semibold text-sm">校验失败</span>
+                    </div>
+                  )}
+                  {message.type === 'success' && (
+                    <div className="flex items-center mb-2 pb-2 border-b border-emerald-200">
+                      <div className="w-6 h-6 bg-emerald-100 rounded-lg flex items-center justify-center mr-2">
+                        <CheckCircle className="w-4 h-4 text-emerald-500" />
+                      </div>
+                      <span className="font-semibold text-sm text-emerald-700">解析成功</span>
+                    </div>
+                  )}
+                  
+                  {message.type === 'processing' ? (
+                    <div className="flex items-center">
+                      <div className="w-5 h-5 border-2 border-amber-400 border-t-transparent rounded-full animate-spin mr-2"></div>
+                      <span className="text-sm">{message.content}</span>
+                    </div>
+                  ) : (
+                    <div className="whitespace-pre-wrap text-sm leading-relaxed">
+                      {message.content}
+                    </div>
+                  )}
 
-                <div className={`text-xs mt-2 ${message.role === 'user' ? 'text-blue-100' : 'text-gray-400'}`}>
-                  {message.timestamp.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
+                  <div className={`text-xs mt-2 flex items-center ${message.role === 'user' ? 'text-slate-400 justify-end' : 'text-slate-400'}`}>
+                    {message.timestamp.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
+                  </div>
                 </div>
               </div>
             )}
@@ -872,36 +1250,35 @@ export default function ChatInterface({ onInvoiceUpdate, initialData, companyInf
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input Area */}
-      <div className="p-4 border-t border-gray-200 bg-gray-50 rounded-b-2xl">
-        <form onSubmit={handleSubmit} className="flex items-end space-x-3">
+      {/* Input Area - 简洁输入区域 */}
+      <div className="p-4 border-t border-slate-100 bg-white rounded-b-2xl">
+        <form onSubmit={handleSubmit} className="flex items-end space-x-2">
           <div className="flex-1 relative">
             <textarea
               ref={inputRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="输入您的开票需求，例如：给腾讯开软件服务，金额50000元..."
-              className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none bg-white text-gray-900 placeholder-gray-400 transition-all"
-              rows={2}
+              placeholder="告诉我：给谁开、开什么、多少钱"
+              className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-slate-300 focus:border-slate-300 resize-none bg-slate-50 text-slate-700 placeholder-slate-400 transition-all text-sm"
+              rows={1}
               disabled={isProcessing || isConfirming}
             />
           </div>
           <button
             type="submit"
             disabled={!input.trim() || isProcessing || isConfirming}
-            className="px-6 py-3 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-xl hover:from-blue-600 hover:to-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center space-x-2 shadow-lg hover:shadow-xl"
+            className="px-4 py-3 bg-slate-800 text-white rounded-xl hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all flex items-center space-x-2"
           >
             {isProcessing ? (
-              <Loader2 className="w-5 h-5 animate-spin" />
+              <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
             ) : (
-              <Send className="w-5 h-5" />
+              <Send className="w-4 h-4" />
             )}
-            <span className="font-medium">发送</span>
           </button>
         </form>
-        <div className="mt-2 text-xs text-gray-400 text-center">
-          💡 支持自然语言描述开票需求
+        <div className="mt-2 text-center text-xs text-slate-400">
+          <span>示例：给腾讯开软件服务费5万 | 给华为开10台服务器每台2万 | 给阿里开专票技术咨询30万</span>
         </div>
       </div>
 

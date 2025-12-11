@@ -2,11 +2,21 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { FileText, TrendingUp, Search, Receipt, Sparkles, Send, ArrowRight, BarChart3, Clock, DollarSign, X, RefreshCw, User, LogOut, ChevronDown, Building2, Settings, BadgeCheck, Check } from 'lucide-react';
+import { FileText, TrendingUp, Search, Receipt, Sparkles, Send, ArrowRight, BarChart3, Clock, DollarSign, X, RefreshCw, User, LogOut, ChevronDown, Building2, Settings, BadgeCheck, Check, MessageSquare, Edit3 } from 'lucide-react';
 import { searchProducts, Product } from '@/lib/productCatalog';
-import { mockCustomers } from '@/lib/mockData';
+import { getAllCustomers, CustomerInfo } from '@/lib/mockData';
 import { getCurrentUser, logout, User as UserType, UserCompanyRelation } from '@/lib/auth';
 import { bindCompany } from '@/lib/qixiangyun';
+import {
+  getCustomerHistory,
+  getProductHistory,
+  addCustomerToHistory,
+  addProductToHistory,
+  searchCustomerHistory,
+  searchProductHistory,
+  CustomerHistoryItem,
+  ProductHistoryItem
+} from '@/lib/invoiceHistory';
 
 export default function Home() {
   const router = useRouter();
@@ -31,7 +41,11 @@ export default function Home() {
     setShowUserMenu(false);
   };
   
+  // 输入模式：template（模板输入）或 freeform（自由输入）
+  const [inputMode, setInputMode] = useState<'template' | 'freeform'>('template');
+  
   // 槽位数据
+  const [invoiceType, setInvoiceType] = useState<'普票' | '专票'>('普票');
   const [customerValue, setCustomerValue] = useState('');
   const [productValue, setProductValue] = useState('');
   const [amountValue, setAmountValue] = useState('');
@@ -43,6 +57,11 @@ export default function Home() {
   const [showCustomerSuggestions, setShowCustomerSuggestions] = useState(false);
   const [productSuggestions, setProductSuggestions] = useState<Product[]>([]);
   const [customerSuggestions, setCustomerSuggestions] = useState<string[]>([]);
+  // 历史记录
+  const [customerHistory, setCustomerHistory] = useState<CustomerHistoryItem[]>([]);
+  const [productHistory, setProductHistory] = useState<ProductHistoryItem[]>([]);
+  // 该企业常用商品
+  const [companyProducts, setCompanyProducts] = useState<ProductHistoryItem[]>([]);
   
   // 统计数据状态 - 从企业信息获取
   const [stats, setStats] = useState({
@@ -193,53 +212,189 @@ export default function Home() {
     }
   };
 
-  // 处理商品输入变化
+  // 处理商品输入变化 - 支持历史记录
   const handleProductChange = (value: string) => {
     setProductValue(value);
-    if (value.length >= 1) {
-      const results = searchProducts(value, 5);
-      setProductSuggestions(results);
-      setShowProductSuggestions(results.length > 0);
+    // 获取历史记录
+    const history = value ? searchProductHistory(value) : getProductHistory();
+    setProductHistory(history.slice(0, 3));
+    
+    // 获取搜索结果（排除已在历史中的）
+    const historyIds = new Set(history.map(h => h.id));
+    const results = searchProducts(value || '', 5).filter(p => !historyIds.has(p.id));
+    setProductSuggestions(results);
+    
+    // 显示下拉（有历史或搜索结果）
+    setShowProductSuggestions(history.length > 0 || results.length > 0);
+  };
+  
+  // 处理商品输入聚焦 - 显示历史记录
+  const handleProductFocus = () => {
+    // 关闭客户下拉框
+    setShowCustomerSuggestions(false);
+    
+    // 获取该客户的历史开票商品
+    if (customerValue) {
+      const customerProducts = recentInvoices
+        .filter(inv => inv.customer.includes(customerValue) || customerValue.includes(inv.customer))
+        .map(inv => ({
+          id: `company-${inv.id}`,
+          name: inv.product,
+          category: '该客户常用',
+          unitPrice: inv.unitPrice
+        }));
+      // 去重
+      const uniqueProducts = customerProducts.filter((item, index, self) => 
+        index === self.findIndex(p => p.name === item.name)
+      );
+      setCompanyProducts(uniqueProducts.slice(0, 3));
     } else {
-      setShowProductSuggestions(false);
+      setCompanyProducts([]);
+    }
+    
+    if (!productValue) {
+      const history = getProductHistory();
+      setProductHistory(history.slice(0, 3));
+      const results = searchProducts('', 5);
+      setProductSuggestions(results.slice(0, 5));
+      setShowProductSuggestions(history.length > 0 || results.length > 0 || companyProducts.length > 0);
+    } else {
+      handleProductChange(productValue);
     }
   };
 
-  // 处理客户输入变化
+  // 处理客户输入变化 - 支持历史记录
   const handleCustomerChange = (value: string) => {
     setCustomerValue(value);
-    if (value.length >= 1) {
-      const customerNames = Object.keys(mockCustomers);
-      const filtered = customerNames.filter(name => 
-        name.toLowerCase().includes(value.toLowerCase())
-      );
-      setCustomerSuggestions(filtered);
-      setShowCustomerSuggestions(filtered.length > 0);
+    // 获取历史记录
+    const history = value ? searchCustomerHistory(value) : getCustomerHistory();
+    setCustomerHistory(history.slice(0, 3));
+    
+    // 获取搜索结果（排除已在历史中的）
+    const historyKeys = new Set(history.map(h => h.key));
+    const allCustomers = getAllCustomers();
+    const customerNames = Object.keys(allCustomers);
+    const filtered = customerNames.filter(name => 
+      !historyKeys.has(name) && name.toLowerCase().includes((value || '').toLowerCase())
+    );
+    const uniqueFiltered = Array.from(new Set(filtered)).slice(0, 5);
+    setCustomerSuggestions(uniqueFiltered);
+    
+    // 显示下拉
+    setShowCustomerSuggestions(history.length > 0 || uniqueFiltered.length > 0);
+  };
+  
+  // 处理客户输入聚焦 - 显示历史记录
+  const handleCustomerFocus = () => {
+    // 关闭商品下拉框
+    setShowProductSuggestions(false);
+    
+    if (!customerValue) {
+      const history = getCustomerHistory();
+      setCustomerHistory(history.slice(0, 3));
+      const allCustomers = getAllCustomers();
+      const customerNames = Object.keys(allCustomers).slice(0, 5);
+      setCustomerSuggestions(customerNames);
+      setShowCustomerSuggestions(history.length > 0 || customerNames.length > 0);
     } else {
-      setShowCustomerSuggestions(false);
+      handleCustomerChange(customerValue);
     }
   };
 
-  // 选择商品
+  // 选择商品 - 添加到历史记录
   const handleSelectProduct = (product: Product) => {
     setProductValue(product.name);
     setUnitPriceValue(product.unitPrice.toString());
     setShowProductSuggestions(false);
+    // 添加到历史记录
+    addProductToHistory({
+      id: product.id,
+      name: product.name,
+      category: product.category,
+      unitPrice: product.unitPrice,
+      unit: product.unit,
+      taxRate: product.taxRate
+    });
+  };
+  
+  // 选择历史商品
+  const handleSelectHistoryProduct = (item: ProductHistoryItem) => {
+    setProductValue(item.name);
+    setUnitPriceValue(item.unitPrice.toString());
+    setShowProductSuggestions(false);
+    // 更新历史记录顺序
+    addProductToHistory(item);
   };
 
-  // 选择客户
+  // 选择客户 - 添加到历史记录
   const handleSelectCustomer = (customer: string) => {
     setCustomerValue(customer);
     setShowCustomerSuggestions(false);
+    // 添加到历史记录
+    const allCustomers = getAllCustomers();
+    const customerData = allCustomers[customer];
+    addCustomerToHistory({
+      key: customer,
+      name: customerData?.name || customer,
+      taxNumber: customerData?.taxNumber
+    });
+  };
+  
+  // 选择历史客户
+  const handleSelectHistoryCustomer = (item: CustomerHistoryItem) => {
+    setCustomerValue(item.key);
+    setShowCustomerSuggestions(false);
+    // 更新历史记录顺序
+    addCustomerToHistory(item);
   };
 
   // 清空所有字段
   const handleClear = () => {
+    setInvoiceType('普票');
     setCustomerValue('');
     setProductValue('');
     setAmountValue('');
     setQuantityValue('');
     setUnitPriceValue('');
+  };
+
+  // 金额联动计算
+  const calculateAmount = (qty: string, price: string): string => {
+    const q = parseFloat(qty);
+    const p = parseFloat(price);
+    if (!isNaN(q) && !isNaN(p) && q > 0 && p > 0) {
+      return (q * p).toFixed(2).replace(/\.00$/, '');
+    }
+    return '';
+  };
+
+  // 处理数量变化 - 自动计算金额
+  const handleQuantityChange = (value: string) => {
+    setQuantityValue(value);
+    const calculated = calculateAmount(value, unitPriceValue);
+    if (calculated) {
+      setAmountValue(calculated);
+    }
+  };
+
+  // 处理单价变化 - 自动计算金额
+  const handleUnitPriceChange = (value: string) => {
+    setUnitPriceValue(value);
+    const calculated = calculateAmount(quantityValue, value);
+    if (calculated) {
+      setAmountValue(calculated);
+    }
+  };
+
+  // 处理金额变化 - 如果有数量，自动计算单价
+  const handleAmountChange = (value: string) => {
+    setAmountValue(value);
+    const amount = parseFloat(value);
+    const qty = parseFloat(quantityValue);
+    if (!isNaN(amount) && !isNaN(qty) && qty > 0 && amount > 0) {
+      const price = (amount / qty).toFixed(2).replace(/\.00$/, '');
+      setUnitPriceValue(price);
+    }
   };
 
   // 填充历史记录
@@ -254,6 +409,7 @@ export default function Home() {
   // 开始开票
   const handleStartInvoice = () => {
     const params = new URLSearchParams();
+    params.set('invoiceType', invoiceType);
     if (customerValue) params.set('customer', customerValue);
     if (productValue) params.set('product', productValue);
     if (amountValue) params.set('amount', amountValue);
@@ -583,19 +739,75 @@ export default function Home() {
                   </div>
                 </div>
 
-                <div className="flex items-center space-x-3 mb-6">
-                  <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-cyan-500 rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/30">
-                    <FileText className="w-5 h-5 text-white" />
+                <div className="flex items-center justify-between mb-6">
+                  <div className="flex items-center space-x-3">
+                    <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-cyan-500 rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/30">
+                      <FileText className="w-5 h-5 text-white" />
+                    </div>
+                    <div>
+                      <h3 className="text-xl font-bold text-slate-900">智能开票</h3>
+                      <p className="text-sm text-slate-500">描述您的开票需求，AI将自动识别并生成</p>
+                    </div>
                   </div>
-                  <div>
-                    <h3 className="text-xl font-bold text-slate-900">智能开票</h3>
-                    <p className="text-sm text-slate-500">描述您的开票需求，AI将自动识别并生成</p>
+                  
+                  {/* 输入模式切换 */}
+                  <div className="flex bg-slate-100 rounded-xl p-1">
+                    <button
+                      onClick={() => setInputMode('template')}
+                      className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                        inputMode === 'template'
+                          ? 'bg-white text-blue-600 shadow-sm'
+                          : 'text-slate-500 hover:text-slate-700'
+                      }`}
+                    >
+                      <Edit3 className="w-4 h-4" />
+                      <span>模板输入</span>
+                    </button>
+                    <button
+                      onClick={() => setInputMode('freeform')}
+                      className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                        inputMode === 'freeform'
+                          ? 'bg-white text-violet-600 shadow-sm'
+                          : 'text-slate-500 hover:text-slate-700'
+                      }`}
+                    >
+                      <MessageSquare className="w-4 h-4" />
+                      <span>自由输入</span>
+                    </button>
                   </div>
                 </div>
 
+                {/* 模板输入模式 */}
+                {inputMode === 'template' && (
+                  <>
                 {/* 模板化输入框 - 参考图设计 */}
                 <div className="bg-slate-50 rounded-2xl p-6 border border-slate-200 mb-6">
                   <div className="flex flex-wrap items-center gap-3 text-lg leading-loose">
+                    {/* 发票类型选择器 */}
+                    <span className="text-blue-600 font-semibold">发票类型</span>
+                    <div className="inline-flex bg-white rounded-xl p-1 shadow-sm border border-slate-200">
+                      <button
+                        onClick={() => setInvoiceType('普票')}
+                        className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                          invoiceType === '普票'
+                            ? 'bg-gradient-to-r from-blue-500 to-cyan-500 text-white shadow-md'
+                            : 'text-slate-600 hover:bg-slate-100'
+                        }`}
+                      >
+                        普票
+                      </button>
+                      <button
+                        onClick={() => setInvoiceType('专票')}
+                        className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                          invoiceType === '专票'
+                            ? 'bg-gradient-to-r from-violet-500 to-purple-500 text-white shadow-md'
+                            : 'text-slate-600 hover:bg-slate-100'
+                        }`}
+                      >
+                        专票
+                      </button>
+                    </div>
+                    
                     <span className="text-blue-600 font-semibold">请帮我开票：给</span>
                     
                     {/* 客户名称槽位 */}
@@ -604,24 +816,57 @@ export default function Home() {
                         type="text"
                         value={customerValue}
                         onChange={(e) => handleCustomerChange(e.target.value)}
-                        onFocus={() => customerValue && handleCustomerChange(customerValue)}
+                        onFocus={handleCustomerFocus}
                         onBlur={() => setTimeout(() => setShowCustomerSuggestions(false), 200)}
                         placeholder="客户名称"
                         className="bg-white border-0 rounded-xl px-5 py-2 text-slate-700 placeholder-slate-400 focus:ring-2 focus:ring-blue-400 transition-all min-w-[180px] text-center font-medium shadow-sm"
                       />
-                      {/* 客户建议下拉 */}
-                      {showCustomerSuggestions && customerSuggestions.length > 0 && (
-                        <div className="absolute top-full left-0 right-0 mt-2 bg-white border border-slate-200 rounded-xl shadow-xl z-50 overflow-hidden">
-                          {customerSuggestions.map((customer) => (
-                            <button
-                              key={customer}
-                              onClick={() => handleSelectCustomer(customer)}
-                              className="w-full px-4 py-3 text-left hover:bg-blue-50 text-sm font-medium text-slate-700 transition-colors"
-                            >
-                              {customer}
-                              <span className="text-xs text-slate-400 ml-2">→ {mockCustomers[customer].name}</span>
-                            </button>
-                          ))}
+                      {/* 客户建议下拉 - 历史记录 + 搜索结果 */}
+                      {showCustomerSuggestions && (customerHistory.length > 0 || customerSuggestions.length > 0) && (
+                        <div className="absolute top-full left-0 right-0 mt-2 bg-white border border-slate-200 rounded-xl shadow-xl z-50 overflow-hidden max-h-64 overflow-y-auto">
+                          {/* 最近使用 */}
+                          {customerHistory.length > 0 && (
+                            <>
+                              <div className="px-3 py-2 bg-amber-50 border-b border-amber-100">
+                                <div className="flex items-center text-xs font-semibold text-amber-700">
+                                  <Clock className="w-3 h-3 mr-1" />
+                                  最近使用
+                                </div>
+                              </div>
+                              {customerHistory.map((item) => (
+                                <button
+                                  key={`history-${item.key}`}
+                                  onClick={() => handleSelectHistoryCustomer(item)}
+                                  className="w-full px-4 py-2.5 text-left hover:bg-blue-50 text-sm font-medium text-slate-700 transition-colors flex items-center gap-2 whitespace-nowrap"
+                                >
+                                  <Clock className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
+                                  <span className="flex-shrink-0">{item.key}</span>
+                                  <span className="text-xs text-slate-400 truncate">→ {item.name}</span>
+                                </button>
+                              ))}
+                            </>
+                          )}
+                          {/* 搜索结果 */}
+                          {customerSuggestions.length > 0 && (
+                            <>
+                              <div className="px-3 py-2 bg-blue-50 border-b border-blue-100">
+                                <div className="flex items-center text-xs font-semibold text-blue-700">
+                                  <Search className="w-3 h-3 mr-1" />
+                                  客户匹配
+                                </div>
+                              </div>
+                              {customerSuggestions.map((customer) => (
+                                <button
+                                  key={`search-${customer}`}
+                                  onClick={() => handleSelectCustomer(customer)}
+                                  className="w-full px-4 py-2.5 text-left hover:bg-blue-50 text-sm font-medium text-slate-700 transition-colors flex items-center gap-2 whitespace-nowrap"
+                                >
+                                  <span className="flex-shrink-0">{customer}</span>
+                                  <span className="text-xs text-slate-400 truncate">→ {getAllCustomers()[customer]?.name || customer}</span>
+                                </button>
+                              ))}
+                            </>
+                          )}
                         </div>
                       )}
                     </div>
@@ -634,36 +879,101 @@ export default function Home() {
                         type="text"
                         value={productValue}
                         onChange={(e) => handleProductChange(e.target.value)}
-                        onFocus={() => productValue && handleProductChange(productValue)}
+                        onFocus={handleProductFocus}
                         onBlur={() => setTimeout(() => setShowProductSuggestions(false), 200)}
                         placeholder="商品/服务类型"
                         className="bg-white border-0 rounded-xl px-5 py-2 text-slate-700 placeholder-slate-400 focus:ring-2 focus:ring-blue-400 transition-all min-w-[200px] text-center font-medium shadow-sm"
                       />
-                      {/* 商品建议下拉 */}
-                      {showProductSuggestions && productSuggestions.length > 0 && (
-                        <div className="absolute top-full left-0 mt-2 bg-white border border-slate-200 rounded-xl shadow-xl z-50 overflow-hidden min-w-[300px]">
-                          <div className="px-4 py-2 bg-blue-50 border-b border-blue-100 text-xs font-semibold text-blue-700">
-                            <Sparkles className="w-3 h-3 inline mr-1" />
-                            智能匹配商品
-                          </div>
-                          {productSuggestions.map((product) => (
-                            <button
-                              key={product.id}
-                              onClick={() => handleSelectProduct(product)}
-                              className="w-full px-4 py-3 text-left hover:bg-blue-50 transition-colors border-b border-slate-100 last:border-0"
-                            >
-                              <div className="flex justify-between items-center">
-                                <div>
-                                  <div className="text-sm font-medium text-slate-800">{product.name}</div>
-                                  <div className="text-xs text-slate-500">{product.category} · {product.unit}</div>
-                                </div>
-                                <div className="text-right">
-                                  <div className="text-sm font-bold text-blue-600">¥{product.unitPrice}</div>
-                                  <div className="text-xs text-slate-400">税率{product.taxRate}%</div>
+                      {/* 商品建议下拉 - 企业常用 + 历史记录 + 搜索结果 */}
+                      {showProductSuggestions && (companyProducts.length > 0 || productHistory.length > 0 || productSuggestions.length > 0) && (
+                        <div className="absolute top-full left-0 mt-2 bg-white border border-slate-200 rounded-xl shadow-xl z-50 overflow-hidden min-w-[300px] max-h-80 overflow-y-auto">
+                          {/* 该客户常用商品 */}
+                          {companyProducts.length > 0 && (
+                            <>
+                              <div className="px-3 py-2 bg-green-50 border-b border-green-100">
+                                <div className="flex items-center text-xs font-semibold text-green-700">
+                                  <Building2 className="w-3 h-3 mr-1" />
+                                  {customerValue} 常用
                                 </div>
                               </div>
-                            </button>
-                          ))}
+                              {companyProducts.map((item) => (
+                                <button
+                                  key={`company-${item.id}`}
+                                  onClick={() => handleSelectHistoryProduct(item)}
+                                  className="w-full px-4 py-2.5 text-left hover:bg-green-50 transition-colors border-b border-slate-100"
+                                >
+                                  <div className="flex justify-between items-center">
+                                    <div className="flex items-center gap-2">
+                                      <Building2 className="w-3.5 h-3.5 text-green-500" />
+                                      <div>
+                                        <div className="text-sm font-medium text-slate-800">{item.name}</div>
+                                        <div className="text-xs text-green-600">曾开过此商品</div>
+                                      </div>
+                                    </div>
+                                    <div className="text-sm font-bold text-green-600">¥{item.unitPrice}</div>
+                                  </div>
+                                </button>
+                              ))}
+                            </>
+                          )}
+                          {/* 最近使用 */}
+                          {productHistory.length > 0 && (
+                            <>
+                              <div className="px-3 py-2 bg-amber-50 border-b border-amber-100">
+                                <div className="flex items-center text-xs font-semibold text-amber-700">
+                                  <Clock className="w-3 h-3 mr-1" />
+                                  最近使用
+                                </div>
+                              </div>
+                              {productHistory.map((item) => (
+                                <button
+                                  key={`history-${item.id}`}
+                                  onClick={() => handleSelectHistoryProduct(item)}
+                                  className="w-full px-4 py-2.5 text-left hover:bg-blue-50 transition-colors border-b border-slate-100"
+                                >
+                                  <div className="flex justify-between items-center">
+                                    <div className="flex items-center gap-2">
+                                      <Clock className="w-3.5 h-3.5 text-slate-400" />
+                                      <div>
+                                        <div className="text-sm font-medium text-slate-800">{item.name}</div>
+                                        <div className="text-xs text-slate-500">{item.category}</div>
+                                      </div>
+                                    </div>
+                                    <div className="text-sm font-bold text-blue-600">¥{item.unitPrice}</div>
+                                  </div>
+                                </button>
+                              ))}
+                            </>
+                          )}
+                          {/* 搜索结果 */}
+                          {productSuggestions.length > 0 && (
+                            <>
+                              <div className="px-3 py-2 bg-blue-50 border-b border-blue-100">
+                                <div className="flex items-center text-xs font-semibold text-blue-700">
+                                  <Sparkles className="w-3 h-3 mr-1" />
+                                  商品匹配
+                                </div>
+                              </div>
+                              {productSuggestions.map((product) => (
+                                <button
+                                  key={`search-${product.id}`}
+                                  onClick={() => handleSelectProduct(product)}
+                                  className="w-full px-4 py-2.5 text-left hover:bg-blue-50 transition-colors border-b border-slate-100 last:border-0"
+                                >
+                                  <div className="flex justify-between items-center">
+                                    <div>
+                                      <div className="text-sm font-medium text-slate-800">{product.name}</div>
+                                      <div className="text-xs text-slate-500">{product.category} · {product.unit}</div>
+                                    </div>
+                                    <div className="text-right">
+                                      <div className="text-sm font-bold text-blue-600">¥{product.unitPrice}</div>
+                                      <div className="text-xs text-slate-400">税率{product.taxRate}%</div>
+                                    </div>
+                                  </div>
+                                </button>
+                              ))}
+                            </>
+                          )}
                         </div>
                       )}
                     </div>
@@ -675,7 +985,7 @@ export default function Home() {
                     <input
                       type="text"
                       value={amountValue}
-                      onChange={(e) => setAmountValue(e.target.value)}
+                      onChange={(e) => handleAmountChange(e.target.value)}
                       placeholder="金额"
                       className="bg-white border-0 rounded-xl px-4 py-2 text-slate-700 placeholder-slate-400 focus:ring-2 focus:ring-blue-400 transition-all w-[120px] text-center font-medium shadow-sm"
                     />
@@ -687,7 +997,7 @@ export default function Home() {
                     <input
                       type="text"
                       value={quantityValue}
-                      onChange={(e) => setQuantityValue(e.target.value)}
+                      onChange={(e) => handleQuantityChange(e.target.value)}
                       placeholder="数量"
                       className="bg-white border-0 rounded-xl px-4 py-2 text-slate-700 placeholder-slate-400 focus:ring-2 focus:ring-blue-400 transition-all w-[100px] text-center font-medium shadow-sm"
                     />
@@ -699,7 +1009,7 @@ export default function Home() {
                     <input
                       type="text"
                       value={unitPriceValue}
-                      onChange={(e) => setUnitPriceValue(e.target.value)}
+                      onChange={(e) => handleUnitPriceChange(e.target.value)}
                       placeholder="单价"
                       className="bg-white border-0 rounded-xl px-4 py-2 text-slate-700 placeholder-slate-400 focus:ring-2 focus:ring-blue-400 transition-all w-[120px] text-center font-medium shadow-sm"
                     />
@@ -801,6 +1111,50 @@ export default function Home() {
                     ))}
                   </div>
                 </div>
+                  </>
+                )}
+
+                {/* 自由输入模式 */}
+                {inputMode === 'freeform' && (
+                  <div className="bg-gradient-to-br from-violet-50 to-purple-50 rounded-2xl p-8 border border-violet-200 mb-6">
+                    <div className="text-center mb-6">
+                      <div className="w-16 h-16 bg-gradient-to-br from-violet-500 to-purple-600 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-violet-500/30">
+                        <MessageSquare className="w-8 h-8 text-white" />
+                      </div>
+                      <h4 className="text-xl font-bold text-slate-900 mb-2">自由描述开票需求</h4>
+                      <p className="text-slate-600 max-w-md mx-auto">
+                        用自然语言描述您的开票需求，AI将智能解析并提取开票信息
+                      </p>
+                    </div>
+                    
+                    <div className="bg-white rounded-xl p-6 border border-violet-100 mb-6">
+                      <div className="text-sm font-medium text-slate-700 mb-3">💡 示例描述</div>
+                      <div className="space-y-2 text-sm text-slate-600">
+                        <div className="flex items-start space-x-2">
+                          <span className="text-violet-500">•</span>
+                          <span>"给腾讯开5万的软件服务费"</span>
+                        </div>
+                        <div className="flex items-start space-x-2">
+                          <span className="text-violet-500">•</span>
+                          <span>"开一张专票给华为，云计算服务，10个月，每月8000元"</span>
+                        </div>
+                        <div className="flex items-start space-x-2">
+                          <span className="text-violet-500">•</span>
+                          <span>"阿里巴巴要开技术咨询费，共12万，税率6%"</span>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <button
+                      onClick={() => router.push('/invoice?mode=freeform')}
+                      className="w-full py-4 bg-gradient-to-r from-violet-500 to-purple-600 text-white rounded-xl font-semibold text-lg hover:from-violet-600 hover:to-purple-700 transition-all shadow-lg hover:shadow-xl flex items-center justify-center space-x-2"
+                    >
+                      <Sparkles className="w-5 h-5" />
+                      <span>开始自由输入</span>
+                      <ArrowRight className="w-5 h-5" />
+                    </button>
+                  </div>
+                )}
 
                 {/* 收起按钮 */}
                 <div className="flex items-center justify-between pt-4 border-t border-slate-100">

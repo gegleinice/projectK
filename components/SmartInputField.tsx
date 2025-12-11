@@ -1,9 +1,19 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Sparkles, X, Check } from 'lucide-react';
+import { Sparkles, X, Clock, Search } from 'lucide-react';
 import { searchProducts, Product } from '@/lib/productCatalog';
-import { mockCustomers } from '@/lib/mockData';
+import { getAllCustomers } from '@/lib/mockData';
+import {
+  getCustomerHistory,
+  getProductHistory,
+  addCustomerToHistory,
+  addProductToHistory,
+  searchCustomerHistory,
+  searchProductHistory,
+  CustomerHistoryItem,
+  ProductHistoryItem
+} from '@/lib/invoiceHistory';
 
 interface InputSlot {
   id: string;
@@ -34,6 +44,16 @@ interface SmartInputFieldProps {
   initialData?: InitialData | null;
 }
 
+// 统一的建议项类型
+interface SuggestionItem {
+  type: 'history' | 'search';
+  id: string;
+  name: string;
+  subtitle?: string;
+  extra?: string;
+  data: any;
+}
+
 export default function SmartInputField({ onSubmit, disabled, initialData }: SmartInputFieldProps) {
   // 定义输入槽位
   const [slots, setSlots] = useState<InputSlot[]>([
@@ -61,7 +81,8 @@ export default function SmartInputField({ onSubmit, disabled, initialData }: Sma
   }, [initialData]);
 
   const [activeSlot, setActiveSlot] = useState<string | null>(null);
-  const [suggestions, setSuggestions] = useState<any[]>([]);
+  const [suggestions, setSuggestions] = useState<SuggestionItem[]>([]);
+  const [historySuggestions, setHistorySuggestions] = useState<SuggestionItem[]>([]);
   const [suggestionType, setSuggestionType] = useState<'customer' | 'product' | null>(null);
   const [showSuggestions, setShowSuggestions] = useState(false);
 
@@ -75,41 +96,149 @@ export default function SmartInputField({ onSubmit, disabled, initialData }: Sma
     ));
   }, []);
 
-  // 处理输入变化
+  // 获取客户建议（历史 + 搜索）
+  const getCustomerSuggestions = useCallback((query: string): { history: SuggestionItem[], search: SuggestionItem[] } => {
+    const allCustomers = getAllCustomers();
+    
+    // 历史记录
+    const historyItems = query 
+      ? searchCustomerHistory(query) 
+      : getCustomerHistory();
+    
+    const history: SuggestionItem[] = historyItems.slice(0, 5).map(item => ({
+      type: 'history' as const,
+      id: `history-${item.key}`,
+      name: item.key,
+      subtitle: item.name,
+      data: item
+    }));
+    
+    // 搜索结果（排除已在历史中的）
+    const historyKeys = new Set(historyItems.map(h => h.key));
+    const searchResults = query 
+      ? allCustomers.filter(c => 
+          !historyKeys.has(c.key) && (
+            c.key.toLowerCase().includes(query.toLowerCase()) ||
+            c.name.toLowerCase().includes(query.toLowerCase())
+          )
+        )
+      : allCustomers.filter(c => !historyKeys.has(c.key));
+    
+    const search: SuggestionItem[] = searchResults.slice(0, 5).map(item => ({
+      type: 'search' as const,
+      id: `search-${item.key}`,
+      name: item.key,
+      subtitle: item.name,
+      data: item
+    }));
+    
+    return { history, search };
+  }, []);
+
+  // 获取商品建议（历史 + 搜索）
+  const getProductSuggestions = useCallback((query: string): { history: SuggestionItem[], search: SuggestionItem[] } => {
+    // 历史记录
+    const historyItems = query 
+      ? searchProductHistory(query) 
+      : getProductHistory();
+    
+    const history: SuggestionItem[] = historyItems.slice(0, 5).map(item => ({
+      type: 'history' as const,
+      id: `history-${item.id}`,
+      name: item.name,
+      subtitle: item.category,
+      extra: `¥${item.unitPrice.toLocaleString()}`,
+      data: item
+    }));
+    
+    // 搜索结果（排除已在历史中的）
+    const historyIds = new Set(historyItems.map(h => h.id));
+    const searchResults = searchProducts(query || '', 10).filter(p => !historyIds.has(p.id));
+    
+    const search: SuggestionItem[] = searchResults.slice(0, 5).map(item => ({
+      type: 'search' as const,
+      id: `search-${item.id}`,
+      name: item.name,
+      subtitle: item.category,
+      extra: `¥${item.unitPrice.toLocaleString()}`,
+      data: item
+    }));
+    
+    return { history, search };
+  }, []);
+
+  // 处理输入框聚焦 - 显示历史记录
+  const handleInputFocus = (slotId: string) => {
+    setActiveSlot(slotId);
+    const slot = slots.find(s => s.id === slotId);
+    if (!slot) return;
+
+    if (slot.type === 'customer') {
+      const { history, search } = getCustomerSuggestions(slot.value);
+      setHistorySuggestions(history);
+      setSuggestions(search);
+      setSuggestionType('customer');
+      setShowSuggestions(history.length > 0 || search.length > 0);
+    } else if (slot.type === 'product') {
+      const { history, search } = getProductSuggestions(slot.value);
+      setHistorySuggestions(history);
+      setSuggestions(search);
+      setSuggestionType('product');
+      setShowSuggestions(history.length > 0 || search.length > 0);
+    } else {
+      setShowSuggestions(false);
+    }
+  };
+
+  // 处理输入变化 - 实时搜索
   const handleInputChange = (slotId: string, value: string) => {
     updateSlotValue(slotId, value);
     
     const slot = slots.find(s => s.id === slotId);
     if (!slot) return;
 
-    // 根据槽位类型进行智能匹配
-    if (slot.type === 'product' && value.length >= 1) {
-      const results = searchProducts(value, 6);
-      setSuggestions(results);
-      setSuggestionType('product');
-      setShowSuggestions(results.length > 0);
-    } else if (slot.type === 'customer' && value.length >= 1) {
-      const customerNames = Object.keys(mockCustomers);
-      const filtered = customerNames.filter(name => 
-        name.toLowerCase().includes(value.toLowerCase()) ||
-        mockCustomers[name].name.toLowerCase().includes(value.toLowerCase())
-      );
-      setSuggestions(filtered.map(key => ({ key, ...mockCustomers[key] })));
+    if (slot.type === 'customer') {
+      const { history, search } = getCustomerSuggestions(value);
+      setHistorySuggestions(history);
+      setSuggestions(search);
       setSuggestionType('customer');
-      setShowSuggestions(filtered.length > 0);
+      setShowSuggestions(history.length > 0 || search.length > 0);
+    } else if (slot.type === 'product') {
+      const { history, search } = getProductSuggestions(value);
+      setHistorySuggestions(history);
+      setSuggestions(search);
+      setSuggestionType('product');
+      setShowSuggestions(history.length > 0 || search.length > 0);
     } else {
       setShowSuggestions(false);
     }
   };
 
   // 选择建议项
-  const handleSelectSuggestion = (item: any) => {
+  const handleSelectSuggestion = (item: SuggestionItem) => {
     if (suggestionType === 'product') {
       updateSlotValue('product', item.name);
       // 自动填充单价
-      updateSlotValue('unitPrice', item.unitPrice.toString());
+      if (item.data.unitPrice) {
+        updateSlotValue('unitPrice', item.data.unitPrice.toString());
+      }
+      // 添加到历史记录
+      addProductToHistory({
+        id: item.data.id || `product-${Date.now()}`,
+        name: item.name,
+        category: item.data.category || '',
+        unitPrice: item.data.unitPrice || 0,
+        unit: item.data.unit || '项',
+        taxRate: item.data.taxRate || 6
+      });
     } else if (suggestionType === 'customer') {
-      updateSlotValue('customer', item.key);
+      updateSlotValue('customer', item.name);
+      // 添加到历史记录
+      addCustomerToHistory({
+        key: item.name,
+        name: item.data.name || item.name,
+        taxNumber: item.data.taxNumber
+      });
     }
     setShowSuggestions(false);
     
@@ -134,13 +263,41 @@ export default function SmartInputField({ onSubmit, disabled, initialData }: Sma
 
   // 提交数据
   const handleSubmit = () => {
+    const customerValue = slots.find(s => s.id === 'customer')?.value || '';
+    const productValue = slots.find(s => s.id === 'product')?.value || '';
+    
+    // 提交时也添加到历史记录
+    if (customerValue) {
+      const allCustomers = getAllCustomers();
+      const customer = allCustomers.find(c => c.key === customerValue || c.name.includes(customerValue));
+      addCustomerToHistory({
+        key: customerValue,
+        name: customer?.name || customerValue,
+        taxNumber: customer?.taxNumber
+      });
+    }
+    
+    if (productValue) {
+      const products = searchProducts(productValue, 1);
+      if (products.length > 0) {
+        addProductToHistory({
+          id: products[0].id,
+          name: productValue,
+          category: products[0].category,
+          unitPrice: products[0].unitPrice,
+          unit: products[0].unit,
+          taxRate: products[0].taxRate
+        });
+      }
+    }
+    
     const data = {
-      customerName: slots.find(s => s.id === 'customer')?.value || '',
-      productName: slots.find(s => s.id === 'product')?.value || '',
+      customerName: customerValue,
+      productName: productValue,
       amount: slots.find(s => s.id === 'amount')?.value || '',
       quantity: slots.find(s => s.id === 'quantity')?.value || '',
       unitPrice: slots.find(s => s.id === 'unitPrice')?.value || '',
-      rawText: `请帮我开票：给 ${slots.find(s => s.id === 'customer')?.value || '[客户名称]'} 开 ${slots.find(s => s.id === 'product')?.value || '[商品类型]'}，金额 ${slots.find(s => s.id === 'amount')?.value || '[金额]'} 元，数量 ${slots.find(s => s.id === 'quantity')?.value || '[数量]'} 个，单价 ${slots.find(s => s.id === 'unitPrice')?.value || '[单价]'} 元/个`
+      rawText: `请帮我开票：给 ${customerValue || '[客户名称]'} 开 ${productValue || '[商品类型]'}，金额 ${slots.find(s => s.id === 'amount')?.value || '[金额]'} 元，数量 ${slots.find(s => s.id === 'quantity')?.value || '[数量]'} 个，单价 ${slots.find(s => s.id === 'unitPrice')?.value || '[单价]'} 元/个`
     };
     onSubmit(data);
   };
@@ -148,54 +305,35 @@ export default function SmartInputField({ onSubmit, disabled, initialData }: Sma
   // 检查是否可以提交
   const canSubmit = slots.some(slot => slot.value.trim() !== '');
 
-  // 渲染商品建议
-  const renderProductSuggestion = (product: Product) => (
+  // 渲染建议项
+  const renderSuggestionItem = (item: SuggestionItem, isHistory: boolean) => (
     <button
-      key={product.id}
+      key={item.id}
       type="button"
-      onClick={() => handleSelectSuggestion(product)}
+      onClick={() => handleSelectSuggestion(item)}
       className="w-full px-4 py-3 text-left hover:bg-gradient-to-r hover:from-blue-50 hover:to-purple-50 transition-all border-b border-gray-100 last:border-b-0 group"
     >
       <div className="flex items-center justify-between">
-        <div className="flex-1">
-          <div className="font-medium text-gray-900 text-sm group-hover:text-blue-700 transition-colors">
-            {product.name}
-          </div>
-          <div className="text-xs text-gray-500 mt-0.5 flex items-center gap-2">
-            <span className="bg-gray-100 px-1.5 py-0.5 rounded">{product.category}</span>
-            <span>·</span>
-            <span>{product.unit}</span>
-            {product.specification && (
-              <>
-                <span>·</span>
-                <span>{product.specification}</span>
-              </>
+        <div className="flex-1 flex items-center gap-2">
+          {isHistory && (
+            <Clock className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
+          )}
+          <div>
+            <div className="font-medium text-gray-900 text-sm group-hover:text-blue-700 transition-colors">
+              {item.name}
+            </div>
+            {item.subtitle && (
+              <div className="text-xs text-gray-500 mt-0.5 truncate max-w-[200px]">
+                {item.subtitle}
+              </div>
             )}
           </div>
         </div>
-        <div className="text-right ml-4">
-          <div className="text-sm font-bold text-blue-600">
-            ¥{product.unitPrice.toLocaleString()}
+        {item.extra && (
+          <div className="text-sm font-bold text-blue-600 ml-4">
+            {item.extra}
           </div>
-          <div className="text-xs text-gray-400">税率 {product.taxRate}%</div>
-        </div>
-      </div>
-    </button>
-  );
-
-  // 渲染客户建议
-  const renderCustomerSuggestion = (customer: any) => (
-    <button
-      key={customer.key}
-      type="button"
-      onClick={() => handleSelectSuggestion(customer)}
-      className="w-full px-4 py-3 text-left hover:bg-gradient-to-r hover:from-blue-50 hover:to-purple-50 transition-all border-b border-gray-100 last:border-b-0 group"
-    >
-      <div className="font-medium text-gray-900 text-sm group-hover:text-blue-700 transition-colors">
-        {customer.key}
-      </div>
-      <div className="text-xs text-gray-500 mt-0.5 truncate">
-        {customer.name}
+        )}
       </div>
     </button>
   );
@@ -215,7 +353,7 @@ export default function SmartInputField({ onSubmit, disabled, initialData }: Sma
               type="text"
               value={slots.find(s => s.id === 'customer')?.value || ''}
               onChange={(e) => handleInputChange('customer', e.target.value)}
-              onFocus={() => setActiveSlot('customer')}
+              onFocus={() => handleInputFocus('customer')}
               placeholder="客户名称"
               disabled={disabled}
               className="bg-gray-100 border-0 rounded-lg px-3 py-1.5 text-gray-800 placeholder-gray-400 focus:ring-2 focus:ring-blue-400 focus:bg-white transition-all min-w-[120px] text-center font-medium"
@@ -231,7 +369,7 @@ export default function SmartInputField({ onSubmit, disabled, initialData }: Sma
               type="text"
               value={slots.find(s => s.id === 'product')?.value || ''}
               onChange={(e) => handleInputChange('product', e.target.value)}
-              onFocus={() => setActiveSlot('product')}
+              onFocus={() => handleInputFocus('product')}
               placeholder="商品/服务类型"
               disabled={disabled}
               className="bg-gray-100 border-0 rounded-lg px-3 py-1.5 text-gray-800 placeholder-gray-400 focus:ring-2 focus:ring-blue-400 focus:bg-white transition-all min-w-[140px] text-center font-medium"
@@ -248,7 +386,7 @@ export default function SmartInputField({ onSubmit, disabled, initialData }: Sma
               type="text"
               value={slots.find(s => s.id === 'amount')?.value || ''}
               onChange={(e) => handleInputChange('amount', e.target.value)}
-              onFocus={() => setActiveSlot('amount')}
+              onFocus={() => handleInputFocus('amount')}
               placeholder="金额"
               disabled={disabled}
               className="bg-gray-100 border-0 rounded-lg px-3 py-1.5 text-gray-800 placeholder-gray-400 focus:ring-2 focus:ring-blue-400 focus:bg-white transition-all w-[100px] text-center font-medium"
@@ -266,7 +404,7 @@ export default function SmartInputField({ onSubmit, disabled, initialData }: Sma
               type="text"
               value={slots.find(s => s.id === 'quantity')?.value || ''}
               onChange={(e) => handleInputChange('quantity', e.target.value)}
-              onFocus={() => setActiveSlot('quantity')}
+              onFocus={() => handleInputFocus('quantity')}
               placeholder="数量"
               disabled={disabled}
               className="bg-gray-100 border-0 rounded-lg px-3 py-1.5 text-gray-800 placeholder-gray-400 focus:ring-2 focus:ring-blue-400 focus:bg-white transition-all w-[80px] text-center font-medium"
@@ -284,7 +422,7 @@ export default function SmartInputField({ onSubmit, disabled, initialData }: Sma
               type="text"
               value={slots.find(s => s.id === 'unitPrice')?.value || ''}
               onChange={(e) => handleInputChange('unitPrice', e.target.value)}
-              onFocus={() => setActiveSlot('unitPrice')}
+              onFocus={() => handleInputFocus('unitPrice')}
               placeholder="单价"
               disabled={disabled}
               className="bg-gray-100 border-0 rounded-lg px-3 py-1.5 text-gray-800 placeholder-gray-400 focus:ring-2 focus:ring-blue-400 focus:bg-white transition-all w-[100px] text-center font-medium"
@@ -322,37 +460,48 @@ export default function SmartInputField({ onSubmit, disabled, initialData }: Sma
       </div>
 
       {/* 智能建议下拉框 */}
-      {showSuggestions && suggestions.length > 0 && (
+      {showSuggestions && (historySuggestions.length > 0 || suggestions.length > 0) && (
         <div
           ref={suggestionsRef}
           className="absolute left-0 right-0 mt-2 bg-white border-2 border-blue-200 rounded-xl shadow-2xl overflow-hidden z-50 animate-slideInUp"
-          style={{
-            top: activeSlot === 'customer' ? '60px' : activeSlot === 'product' ? '60px' : 'auto'
-          }}
         >
-          {/* 建议头部 */}
-          <div className="px-4 py-3 bg-gradient-to-r from-blue-50 to-purple-50 border-b border-blue-100">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center text-sm font-semibold text-blue-800">
-                <Sparkles className="w-4 h-4 mr-2" />
-                {suggestionType === 'product' ? '智能匹配商品' : '匹配客户'} ({suggestions.length})
+          {/* 最近使用 */}
+          {historySuggestions.length > 0 && (
+            <>
+              <div className="px-4 py-2.5 bg-gradient-to-r from-amber-50 to-orange-50 border-b border-amber-100">
+                <div className="flex items-center text-xs font-semibold text-amber-700">
+                  <Clock className="w-3.5 h-3.5 mr-1.5" />
+                  最近使用
+                </div>
               </div>
-              <button
-                onClick={() => setShowSuggestions(false)}
-                className="text-gray-400 hover:text-gray-600 transition-colors"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
+              <div className="max-h-48 overflow-y-auto">
+                {historySuggestions.map(item => renderSuggestionItem(item, true))}
+              </div>
+            </>
+          )}
           
-          {/* 建议列表 */}
-          <div className="max-h-72 overflow-y-auto">
-            {suggestionType === 'product' 
-              ? suggestions.map((item: Product) => renderProductSuggestion(item))
-              : suggestions.map((item: any) => renderCustomerSuggestion(item))
-            }
-          </div>
+          {/* 更多匹配 */}
+          {suggestions.length > 0 && (
+            <>
+              <div className="px-4 py-2.5 bg-gradient-to-r from-blue-50 to-purple-50 border-b border-blue-100">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center text-xs font-semibold text-blue-700">
+                    <Search className="w-3.5 h-3.5 mr-1.5" />
+                    {suggestionType === 'product' ? '商品匹配' : '客户匹配'}
+                  </div>
+                  <button
+                    onClick={() => setShowSuggestions(false)}
+                    className="text-gray-400 hover:text-gray-600 transition-colors"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+              <div className="max-h-48 overflow-y-auto">
+                {suggestions.map(item => renderSuggestionItem(item, false))}
+              </div>
+            </>
+          )}
         </div>
       )}
 
@@ -374,4 +523,3 @@ export default function SmartInputField({ onSubmit, disabled, initialData }: Sma
     </div>
   );
 }
-

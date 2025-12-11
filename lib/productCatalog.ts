@@ -1,4 +1,6 @@
 // 商品清单 - 参照 商品清单.xlsx
+import { getProjects, ProjectItem } from './invoiceSettings';
+
 export interface Product {
   id: string;
   name: string;
@@ -9,6 +11,7 @@ export interface Product {
   taxRate: number;
   keywords: string[]; // 用于智能匹配的关键词
   description?: string;
+  isUserDefined?: boolean; // 是否为用户自定义项目
 }
 
 // 完整商品目录
@@ -279,17 +282,84 @@ export const productCatalog: Product[] = [
 ];
 
 /**
+ * 将用户维护的项目转换为Product格式
+ */
+function projectToProduct(project: ProjectItem): Product {
+  return {
+    id: `user_${project.id}`,
+    name: project.name,
+    category: project.category,
+    specification: project.specification,
+    unit: project.unit,
+    unitPrice: project.unitPrice,
+    taxRate: project.taxRate,
+    keywords: [project.name, project.category, project.taxCode].filter(Boolean),
+    isUserDefined: true
+  };
+}
+
+/**
  * 智能搜索商品
  * @param query 搜索关键词
  * @param limit 返回结果数量限制
- * @returns 匹配的商品列表
+ * @returns 匹配的商品列表（用户维护的项目优先）
  */
 export function searchProducts(query: string, limit: number = 5): Product[] {
-  if (!query || query.trim().length === 0) return [];
+  // 空查询时返回全部商品（用户项目优先）
+  if (!query || query.trim().length === 0) {
+    const allProducts: Product[] = [];
+    try {
+      const userProjects = getProjects();
+      for (const project of userProjects) {
+        allProducts.push(projectToProduct(project));
+      }
+    } catch (e) {
+      console.error('Failed to get user projects:', e);
+    }
+    // 添加系统商品
+    for (const product of productCatalog) {
+      allProducts.push(product);
+    }
+    return allProducts.slice(0, limit);
+  }
   
   const searchTerm = query.toLowerCase().trim();
   const results: Array<{ product: Product; score: number }> = [];
 
+  // 首先搜索用户维护的项目（优先级更高）
+  try {
+    const userProjects = getProjects();
+    for (const project of userProjects) {
+      let score = 0;
+      const product = projectToProduct(project);
+
+      // 完全匹配项目名称
+      if (project.name.toLowerCase() === searchTerm) {
+        score += 150; // 用户项目完全匹配得分更高
+      }
+      // 项目名称包含搜索词
+      else if (project.name.toLowerCase().includes(searchTerm)) {
+        score += 80;
+      }
+      // 搜索词包含项目名称
+      else if (searchTerm.includes(project.name.toLowerCase())) {
+        score += 60;
+      }
+
+      // 类别匹配
+      if (project.category.toLowerCase().includes(searchTerm)) {
+        score += 20;
+      }
+
+      if (score > 0) {
+        results.push({ product, score });
+      }
+    }
+  } catch {
+    // 在服务端渲染时忽略localStorage访问错误
+  }
+
+  // 然后搜索系统商品目录
   for (const product of productCatalog) {
     let score = 0;
 

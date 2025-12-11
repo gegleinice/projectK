@@ -45,12 +45,14 @@ export default function InvoicePreview({ invoiceData, sellerInfo }: InvoicePrevi
         </div>
       ) : (
         // Invoice Display - 复刻真实发票样式
-        <div className="border-4 border-red-600 bg-white p-6">
+        <div className={`border-4 bg-white p-6 ${invoiceData.invoiceType === '专票' ? 'border-red-700' : 'border-red-600'}`}>
           {/* 发票标题和印章 */}
           <div className="relative mb-6">
             <div className="text-center">
-              <h1 className="text-3xl font-bold text-gray-800 mb-1">电子发票（普通发票）</h1>
-              <div className="h-0.5 bg-red-600 mx-auto" style={{ width: '500px' }}></div>
+              <h1 className={`text-3xl font-bold mb-1 ${invoiceData.invoiceType === '专票' ? 'text-red-700' : 'text-gray-800'}`}>
+                {invoiceData.invoiceType === '专票' ? '增值税专用发票' : '电子发票（普通发票）'}
+              </h1>
+              <div className={`h-0.5 mx-auto ${invoiceData.invoiceType === '专票' ? 'bg-red-700' : 'bg-red-600'}`} style={{ width: '500px' }}></div>
             </div>
             {/* 模拟红色印章 */}
             <div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-2">
@@ -91,6 +93,22 @@ export default function InvoicePreview({ invoiceData, sellerInfo }: InvoicePrevi
                           {invoiceData.customerInfo.taxNumber}
                         </span>
                       </div>
+                      {invoiceData.invoiceType === '专票' && (
+                        <>
+                          <div className="text-sm mb-2">
+                            <span className="text-gray-600">地址、电话：</span>
+                            <span className="text-gray-900 text-xs">
+                              {invoiceData.customerInfo.address} {invoiceData.customerInfo.phone}
+                            </span>
+                          </div>
+                          <div className="text-sm mb-2">
+                            <span className="text-gray-600">开户行及账号：</span>
+                            <span className="text-gray-900 text-xs">
+                              {invoiceData.customerInfo.bank} {invoiceData.customerInfo.accountNumber}
+                            </span>
+                          </div>
+                        </>
+                      )}
                     </>
                   )}
                 </div>
@@ -112,6 +130,22 @@ export default function InvoicePreview({ invoiceData, sellerInfo }: InvoicePrevi
                     <span className="text-gray-600">统一社会信用代码/纳税人识别号：</span>
                     <span className="font-mono text-gray-900 text-xs">{sellerInfo?.creditCode || '91440300MA5XXXXXX'}</span>
                   </div>
+                  {invoiceData.invoiceType === '专票' && sellerInfo && (
+                    <>
+                      <div className="text-sm mb-2">
+                        <span className="text-gray-600">地址、电话：</span>
+                        <span className="text-gray-900 text-xs">
+                          {sellerInfo.invoiceAddress || sellerInfo.registeredAddress} {sellerInfo.invoicePhone || ''}
+                        </span>
+                      </div>
+                      <div className="text-sm mb-2">
+                        <span className="text-gray-600">开户行及账号：</span>
+                        <span className="text-gray-900 text-xs">
+                          {sellerInfo.bankName} {sellerInfo.bankAccount}
+                        </span>
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
             </div>

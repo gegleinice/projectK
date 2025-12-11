@@ -1,5 +1,6 @@
 // 开票字段类型定义
 export interface InvoiceFields {
+  invoiceType: '普票' | '专票';  // 发票类型
   customerName: string;          // 收票方
   amount: number | null;         // 金额
   quantity: number | null;       // 数量
@@ -34,14 +35,22 @@ function isPlaceholder(value: string): boolean {
 }
 
 // 自然语言解析函数
-export function parseInvoiceRequest(input: string): InvoiceFields {
+export function parseInvoiceRequest(input: string, defaultInvoiceType: '普票' | '专票' = '普票'): InvoiceFields {
   const fields: InvoiceFields = {
+    invoiceType: defaultInvoiceType,
     customerName: '',
     amount: null,
     quantity: null,
     unitPrice: null,
     productType: ''
   };
+
+  // 提取发票类型
+  if (input.includes('专票') || input.includes('增值税专用发票')) {
+    fields.invoiceType = '专票';
+  } else if (input.includes('普票') || input.includes('增值税普通发票')) {
+    fields.invoiceType = '普票';
+  }
 
   // 提取客户名称
   const customerPatterns = [

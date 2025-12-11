@@ -1,3 +1,5 @@
+import { getCustomers, CustomerItem } from './invoiceSettings';
+
 // Mock客户数据库
 export interface CustomerInfo {
   name: string;
@@ -6,6 +8,7 @@ export interface CustomerInfo {
   phone: string;
   bank: string;
   accountNumber: string;
+  isUserDefined?: boolean;
 }
 
 export const mockCustomers: Record<string, CustomerInfo> = {
@@ -88,5 +91,76 @@ export const invoiceTemplates: InvoiceTemplate[] = [
     notes: 'AI算法开发'
   }
 ];
+
+/**
+ * 将用户维护的客户转换为CustomerInfo格式
+ */
+function customerItemToInfo(item: CustomerItem): CustomerInfo {
+  return {
+    name: item.name,
+    taxNumber: item.taxNumber,
+    address: item.address,
+    phone: item.phone,
+    bank: item.bankName,
+    accountNumber: item.bankAccount,
+    isUserDefined: true
+  };
+}
+
+/**
+ * 获取所有客户（用户维护的优先）
+ * 返回合并后的客户字典，key为客户简称
+ */
+export function getAllCustomers(): Record<string, CustomerInfo> {
+  const result: Record<string, CustomerInfo> = { ...mockCustomers };
+  
+  try {
+    const userCustomers = getCustomers();
+    for (const customer of userCustomers) {
+      // 生成简称（取公司名称的关键词）
+      let shortName = customer.name
+        .replace(/有限公司|股份有限公司|集团|（中国）|（深圳）|（北京）|（上海）/g, '')
+        .replace(/深圳市|北京|上海|广州|杭州/g, '')
+        .trim();
+      
+      // 如果简称太长，取前几个字
+      if (shortName.length > 6) {
+        shortName = shortName.substring(0, 4);
+      }
+      
+      result[shortName] = customerItemToInfo(customer);
+      // 同时用全称作为key
+      result[customer.name] = customerItemToInfo(customer);
+    }
+  } catch {
+    // 在服务端渲染时忽略localStorage访问错误
+  }
+  
+  return result;
+}
+
+/**
+ * 根据客户名称查找客户信息（支持模糊匹配）
+ */
+export function findCustomer(name: string): CustomerInfo | undefined {
+  const allCustomers = getAllCustomers();
+  
+  // 精确匹配
+  if (allCustomers[name]) {
+    return allCustomers[name];
+  }
+  
+  // 模糊匹配
+  const lowerName = name.toLowerCase();
+  for (const [key, customer] of Object.entries(allCustomers)) {
+    if (key.toLowerCase().includes(lowerName) || 
+        customer.name.toLowerCase().includes(lowerName) ||
+        lowerName.includes(key.toLowerCase())) {
+      return customer;
+    }
+  }
+  
+  return undefined;
+}
 
 
