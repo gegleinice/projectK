@@ -24,6 +24,7 @@ export interface ParsedInvoice extends InvoiceFields {
   category?: string;
   invoiceNumber?: string;
   unit?: string;
+  remark?: string;
 }
 
 export interface ValidationError {
