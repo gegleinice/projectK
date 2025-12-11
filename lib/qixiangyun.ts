@@ -2,7 +2,7 @@
 
 import { CompanyInfo } from './auth';
 
-// 模拟企业数据库（按企业名称或信用代码查询）
+// 模拟企业数据库（按企业名称或信用代码查询）- 包含完整工商+税务信息
 const companyDatabase: Record<string, Partial<CompanyInfo>> = {
   '深圳市智慧科技有限公司': {
     name: '深圳市智慧科技有限公司',
@@ -11,6 +11,12 @@ const companyDatabase: Record<string, Partial<CompanyInfo>> = {
     registeredCapital: '500万人民币',
     establishDate: '2020-03-15',
     businessStatus: '存续',
+    // 新增字段
+    industry: '软件和信息技术服务业',
+    creditLevel: 'A',
+    companyType: '有限责任公司(自然人投资或控股)',
+    taxAuthority: '国家税务总局深圳市南山区税务局',
+    // 原有字段
     registeredAddress: '深圳市南山区科技园南区科苑路15号',
     province: '广东省',
     city: '深圳市',
@@ -25,6 +31,10 @@ const companyDatabase: Record<string, Partial<CompanyInfo>> = {
     registeredCapital: '1000万人民币',
     establishDate: '2018-06-20',
     businessStatus: '存续',
+    industry: '互联网和相关服务业',
+    creditLevel: 'A',
+    companyType: '有限责任公司(自然人投资或控股)',
+    taxAuthority: '国家税务总局杭州市余杭区税务局',
     registeredAddress: '杭州市余杭区文一西路998号未来科技城',
     province: '浙江省',
     city: '杭州市',
@@ -39,6 +49,10 @@ const companyDatabase: Record<string, Partial<CompanyInfo>> = {
     registeredCapital: '200万人民币',
     establishDate: '2019-09-10',
     businessStatus: '存续',
+    industry: '批发业',
+    creditLevel: 'B',
+    companyType: '有限责任公司(自然人独资)',
+    taxAuthority: '国家税务总局上海市浦东新区税务局',
     registeredAddress: '上海市浦东新区张江高科技园区博云路2号',
     province: '上海市',
     city: '上海市',
@@ -53,6 +67,10 @@ const companyDatabase: Record<string, Partial<CompanyInfo>> = {
     registeredCapital: '2000万人民币',
     establishDate: '2017-04-08',
     businessStatus: '存续',
+    industry: '研究和试验发展',
+    creditLevel: 'A',
+    companyType: '有限责任公司(自然人投资或控股)',
+    taxAuthority: '国家税务总局北京市海淀区税务局',
     registeredAddress: '北京市海淀区中关村东路66号世纪科贸大厦',
     province: '北京市',
     city: '北京市',
@@ -67,6 +85,10 @@ const companyDatabase: Record<string, Partial<CompanyInfo>> = {
     registeredCapital: '100万人民币',
     establishDate: '2021-02-28',
     businessStatus: '存续',
+    industry: '餐饮业',
+    creditLevel: 'B',
+    companyType: '有限责任公司(自然人独资)',
+    taxAuthority: '国家税务总局广州市天河区税务局',
     registeredAddress: '广州市天河区天河路385号太古汇',
     province: '广东省',
     city: '广州市',
@@ -268,6 +290,12 @@ export async function bindCompany(companyName: string): Promise<{
     registeredCapital: baseInfo.registeredCapital || '',
     establishDate: baseInfo.establishDate || '',
     businessStatus: baseInfo.businessStatus || '',
+    // 新增字段
+    industry: baseInfo.industry || baseInfo.industryCategory || '',
+    creditLevel: baseInfo.creditLevel || 'B',
+    companyType: baseInfo.companyType || '有限责任公司',
+    taxAuthority: baseInfo.taxAuthority || invoiceLocation.taxAuthority,
+    // 原有字段
     registeredAddress: baseInfo.registeredAddress || '',
     province: baseInfo.province || '',
     city: baseInfo.city || '',
@@ -289,5 +317,6 @@ export async function bindCompany(companyName: string): Promise<{
     companyInfo
   };
 }
+
 
 

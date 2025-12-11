@@ -10,19 +10,35 @@ import {
   Sparkles,
   Building2,
   CheckCircle2,
-  Loader2
+  Loader2,
+  User,
+  CreditCard,
+  ChevronRight,
+  Check
 } from 'lucide-react';
-import { sendVerificationCode, verifyCode, loginOrRegister, saveUser, getCurrentUser } from '@/lib/auth';
+import { sendVerificationCode, verifyCode, loginOrRegister, saveUser, getCurrentUser, verifyRealName, UserCompanyRelation } from '@/lib/auth';
+import { bindCompany } from '@/lib/qixiangyun';
 
 export default function LoginPage() {
   const router = useRouter();
   const [phone, setPhone] = useState('');
   const [code, setCode] = useState('');
-  const [step, setStep] = useState<'phone' | 'code' | 'success'>('phone');
+  const [step, setStep] = useState<'phone' | 'code' | 'verify' | 'companies' | 'success'>('phone');
   const [countdown, setCountdown] = useState(0);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  
+  // 实名认证相关
+  const [realName, setRealName] = useState('');
+  const [idCard, setIdCard] = useState('');
+  
+  // 名下企业列表
+  const [relatedCompanies, setRelatedCompanies] = useState<UserCompanyRelation[]>([]);
+  const [selectedCompanyIndex, setSelectedCompanyIndex] = useState<number | null>(null);
+  
+  // 当前用户临时存储
+  const [tempUser, setTempUser] = useState<ReturnType<typeof loginOrRegister> | null>(null);
 
   // 检查是否已登录
   useEffect(() => {
@@ -84,20 +100,86 @@ export default function LoginPage() {
       
       // 登录或注册
       const user = loginOrRegister(phone);
-      saveUser(user);
+      setTempUser(user);
       
-      setStep('success');
-      
-      // 延迟跳转
-      setTimeout(() => {
-        if (user.companyBound) {
-          router.push('/');
-        } else {
-          router.push('/user/bindcompany');
-        }
-      }, 1500);
+      // 如果已经实名认证且绑定了企业，直接进入
+      if (user.verified && user.companyBound) {
+        saveUser(user);
+        setStep('success');
+        setTimeout(() => router.push('/'), 1500);
+      } else if (user.verified && user.relatedCompanies && user.relatedCompanies.length > 0) {
+        // 已实名但未选择企业
+        setRelatedCompanies(user.relatedCompanies);
+        setStep('companies');
+      } else {
+        // 需要实名认证
+        setStep('verify');
+      }
     } catch {
       setError('登录失败，请稍后重试');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 实名认证
+  const handleVerifyRealName = async () => {
+    if (!realName || realName.length < 2) {
+      setError('请输入正确的姓名');
+      return;
+    }
+    if (!idCard || idCard.length < 15) {
+      setError('请输入正确的身份证号');
+      return;
+    }
+    
+    setLoading(true);
+    setError('');
+    
+    try {
+      const result = verifyRealName(realName, idCard);
+      
+      if (result.success && result.relatedCompanies) {
+        setRelatedCompanies(result.relatedCompanies);
+        
+        // 更新用户信息
+        if (tempUser) {
+          tempUser.verified = true;
+          tempUser.realName = realName;
+          tempUser.idCard = idCard.slice(0, 6) + '********' + idCard.slice(-4);
+          tempUser.relatedCompanies = result.relatedCompanies;
+        }
+        
+        setStep('companies');
+      }
+    } catch {
+      setError('实名认证失败，请稍后重试');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 选择企业并绑定
+  const handleSelectCompany = async () => {
+    if (selectedCompanyIndex === null || !tempUser) return;
+    
+    const selectedCompany = relatedCompanies[selectedCompanyIndex];
+    setLoading(true);
+    setError('');
+    
+    try {
+      const result = await bindCompany(selectedCompany.companyName);
+      
+      if (result.success && result.companyInfo) {
+        tempUser.companyBound = true;
+        tempUser.company = result.companyInfo;
+        saveUser(tempUser);
+        
+        setStep('success');
+        setTimeout(() => router.push('/'), 1500);
+      }
+    } catch {
+      setError('绑定企业失败，请稍后重试');
     } finally {
       setLoading(false);
     }
@@ -200,6 +282,142 @@ export default function LoginPage() {
                 <h2 className="text-2xl font-bold text-slate-900 mb-2">登录成功</h2>
                 <p className="text-slate-500">正在为您跳转...</p>
               </div>
+            ) : step === 'verify' ? (
+              // 实名认证
+              <>
+                {/* 步骤指示器 */}
+                <div className="flex items-center justify-center space-x-2 mb-6">
+                  <span className="w-6 h-6 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center text-xs font-bold">✓</span>
+                  <div className="w-12 h-0.5 bg-emerald-200"></div>
+                  <span className="w-6 h-6 bg-blue-600 text-white rounded-full flex items-center justify-center text-xs font-bold">2</span>
+                  <div className="w-12 h-0.5 bg-slate-200"></div>
+                  <span className="w-6 h-6 bg-slate-100 text-slate-400 rounded-full flex items-center justify-center text-xs font-bold">3</span>
+                </div>
+                
+                <div className="text-center mb-8">
+                  <h2 className="text-2xl font-bold text-slate-900 mb-2">自然人认证</h2>
+                  <p className="text-slate-500 text-sm">完成实名认证后自动带出您名下的企业</p>
+                </div>
+                
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">真实姓名</label>
+                    <div className="relative">
+                      <User className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                      <input
+                        type="text"
+                        value={realName}
+                        onChange={(e) => { setRealName(e.target.value); setError(''); }}
+                        placeholder="请输入真实姓名"
+                        className="w-full pl-12 pr-4 py-4 bg-slate-50 border-0 rounded-xl text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all"
+                        autoFocus
+                      />
+                    </div>
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">身份证号</label>
+                    <div className="relative">
+                      <CreditCard className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                      <input
+                        type="text"
+                        value={idCard}
+                        onChange={(e) => { setIdCard(e.target.value.replace(/[^\dXx]/g, '').slice(0, 18)); setError(''); }}
+                        placeholder="请输入身份证号"
+                        className="w-full pl-12 pr-4 py-4 bg-slate-50 border-0 rounded-xl text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all"
+                      />
+                    </div>
+                  </div>
+                  
+                  {error && <p className="text-red-500 text-sm text-center">{error}</p>}
+                  
+                  <button
+                    onClick={handleVerifyRealName}
+                    disabled={loading || realName.length < 2 || idCard.length < 15}
+                    className="w-full py-4 bg-gradient-to-r from-blue-600 to-cyan-500 text-white rounded-xl font-semibold text-lg hover:from-blue-700 hover:to-cyan-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center space-x-2 shadow-lg shadow-blue-500/30"
+                  >
+                    {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <><span>认证并查询名下企业</span><ArrowRight className="w-5 h-5" /></>}
+                  </button>
+                </div>
+                
+                <div className="mt-6 p-4 bg-blue-50 rounded-xl border border-blue-100">
+                  <p className="text-blue-700 text-xs text-center">🔒 您的信息将通过税务系统安全认证，仅用于查询关联企业</p>
+                </div>
+              </>
+            ) : step === 'companies' ? (
+              // 选择企业
+              <>
+                {/* 步骤指示器 */}
+                <div className="flex items-center justify-center space-x-2 mb-6">
+                  <span className="w-6 h-6 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center text-xs font-bold">✓</span>
+                  <div className="w-12 h-0.5 bg-emerald-200"></div>
+                  <span className="w-6 h-6 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center text-xs font-bold">✓</span>
+                  <div className="w-12 h-0.5 bg-emerald-200"></div>
+                  <span className="w-6 h-6 bg-blue-600 text-white rounded-full flex items-center justify-center text-xs font-bold">3</span>
+                </div>
+                
+                <div className="text-center mb-6">
+                  <h2 className="text-2xl font-bold text-slate-900 mb-2">选择您的企业</h2>
+                  <p className="text-slate-500 text-sm">您名下有 <span className="text-blue-600 font-semibold">{relatedCompanies.length}</span> 家关联企业</p>
+                </div>
+                
+                <div className="space-y-3 max-h-64 overflow-y-auto mb-6">
+                  {relatedCompanies.map((company, index) => (
+                    <button
+                      key={index}
+                      onClick={() => setSelectedCompanyIndex(index)}
+                      className={`w-full p-4 rounded-xl border-2 text-left transition-all ${
+                        selectedCompanyIndex === index 
+                          ? 'border-blue-500 bg-blue-50' 
+                          : 'border-slate-200 hover:border-blue-300 bg-white'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-3">
+                          <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-lg font-bold ${
+                            selectedCompanyIndex === index ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600'
+                          }`}>
+                            {company.companyName.substring(0, 1)}
+                          </div>
+                          <div>
+                            <p className="font-semibold text-slate-900 text-sm">{company.companyName}</p>
+                            <div className="flex items-center space-x-2 mt-1">
+                              <span className={`px-2 py-0.5 text-xs rounded-md ${
+                                company.role === '法定代表人' ? 'bg-violet-100 text-violet-700' : 'bg-slate-100 text-slate-600'
+                              }`}>
+                                {company.role}
+                              </span>
+                              <span className="text-xs text-slate-400">{company.creditCode}</span>
+                            </div>
+                          </div>
+                        </div>
+                        {selectedCompanyIndex === index && (
+                          <div className="w-6 h-6 bg-blue-600 rounded-full flex items-center justify-center">
+                            <Check className="w-4 h-4 text-white" />
+                          </div>
+                        )}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+                
+                {error && <p className="text-red-500 text-sm text-center mb-4">{error}</p>}
+                
+                <button
+                  onClick={handleSelectCompany}
+                  disabled={loading || selectedCompanyIndex === null}
+                  className="w-full py-4 bg-gradient-to-r from-blue-600 to-cyan-500 text-white rounded-xl font-semibold text-lg hover:from-blue-700 hover:to-cyan-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center space-x-2 shadow-lg shadow-blue-500/30"
+                >
+                  {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <><span>确认并进入</span><ArrowRight className="w-5 h-5" /></>}
+                </button>
+                
+                <button
+                  onClick={() => router.push('/user/bindcompany')}
+                  className="w-full mt-3 py-3 text-slate-500 hover:text-slate-700 text-sm"
+                >
+                  + 绑定其他企业
+                </button>
+              </>
             ) : (
               <>
                 {/* 标题 */}
@@ -319,5 +537,6 @@ export default function LoginPage() {
     </div>
   );
 }
+
 
 

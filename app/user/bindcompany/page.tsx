@@ -270,28 +270,52 @@ export default function BindCompanyPage() {
                 </div>
               </div>
 
-              {/* 基础信息 */}
-              <div className="p-8">
-                <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-4">基础信息</h3>
-                <div className="grid grid-cols-2 gap-6">
-                  <InfoItem icon={<User />} label="法定代表人" value={companyInfo.legalPerson} />
-                  <InfoItem icon={<Briefcase />} label="注册资本" value={companyInfo.registeredCapital} />
-                  <InfoItem icon={<Calendar />} label="成立日期" value={companyInfo.establishDate} />
+              {/* 基础信息 - 新布局 */}
+              <div className="p-8 space-y-6">
+                <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wide">工商信息</h3>
+                <div className="grid grid-cols-2 lg:grid-cols-3 gap-5">
+                  <InfoItem icon={<Briefcase />} label="企业行业" value={companyInfo.industry || companyInfo.industryCategory} />
                   <InfoItem icon={<CheckCircle2 />} label="经营状态" value={companyInfo.businessStatus} highlight />
+                  <InfoItem 
+                    icon={<Shield />} 
+                    label="信用等级" 
+                    value={`${companyInfo.creditLevel || 'B'}级`} 
+                    badge={companyInfo.creditLevel === 'A' ? 'success' : companyInfo.creditLevel === 'B' ? 'warning' : 'default'}
+                  />
+                  <InfoItem icon={<Building2 />} label="注册资本" value={companyInfo.registeredCapital} />
+                  <InfoItem icon={<FileText />} label="企业类型" value={companyInfo.companyType || '有限责任公司'} />
+                  <InfoItem icon={<Calendar />} label="成立时间" value={companyInfo.establishDate} />
+                  <InfoItem icon={<User />} label="法定代表人" value={companyInfo.legalPerson} />
                 </div>
-              </div>
 
-              {/* 地址信息 */}
-              <div className="px-8 pb-8">
-                <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-4">地址信息</h3>
-                <div className="bg-slate-50 rounded-xl p-4">
-                  <div className="flex items-start space-x-3">
-                    <MapPin className="w-5 h-5 text-slate-400 mt-0.5" />
-                    <div>
-                      <p className="text-slate-900 font-medium">{companyInfo.registeredAddress}</p>
-                      <p className="text-slate-500 text-sm mt-1">
-                        {companyInfo.province} · {companyInfo.city} · {companyInfo.district}
-                      </p>
+                {/* 地址信息 */}
+                <div className="pt-4 border-t border-slate-100">
+                  <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-4">注册地址</h3>
+                  <div className="bg-slate-50 rounded-xl p-4">
+                    <div className="flex items-start space-x-3">
+                      <MapPin className="w-5 h-5 text-blue-500 mt-0.5" />
+                      <div>
+                        <p className="text-slate-900 font-medium">{companyInfo.registeredAddress}</p>
+                        <p className="text-slate-500 text-sm mt-1">
+                          {companyInfo.province} · {companyInfo.city} · {companyInfo.district}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 所属税务机关 */}
+                <div className="pt-4 border-t border-slate-100">
+                  <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-4">所属税务机关</h3>
+                  <div className="bg-gradient-to-r from-blue-50 to-cyan-50 rounded-xl p-4 border border-blue-100">
+                    <div className="flex items-center space-x-3">
+                      <div className="w-10 h-10 bg-blue-100 rounded-xl flex items-center justify-center">
+                        <Building2 className="w-5 h-5 text-blue-600" />
+                      </div>
+                      <div>
+                        <p className="text-slate-900 font-semibold">{companyInfo.taxAuthority || `${companyInfo.province}${companyInfo.city}税务局`}</p>
+                        <p className="text-slate-500 text-xs mt-0.5">主管税务机关</p>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -421,23 +445,39 @@ export default function BindCompanyPage() {
 }
 
 // 信息项组件
-function InfoItem({ icon, label, value, highlight = false }: { 
+function InfoItem({ icon, label, value, highlight = false, badge }: { 
   icon: React.ReactNode; 
   label: string; 
   value: string;
   highlight?: boolean;
+  badge?: 'success' | 'warning' | 'default';
 }) {
+  const getBadgeStyle = () => {
+    switch (badge) {
+      case 'success': return 'bg-emerald-100 text-emerald-700 border-emerald-200';
+      case 'warning': return 'bg-amber-100 text-amber-700 border-amber-200';
+      default: return '';
+    }
+  };
+  
   return (
     <div className="flex items-start space-x-3">
-      <div className="w-8 h-8 bg-slate-100 rounded-lg flex items-center justify-center text-slate-400">
+      <div className="w-8 h-8 bg-slate-100 rounded-lg flex items-center justify-center text-slate-400 flex-shrink-0">
         {icon}
       </div>
-      <div>
-        <p className="text-sm text-slate-500">{label}</p>
-        <p className={`font-medium ${highlight ? 'text-emerald-600' : 'text-slate-900'}`}>{value}</p>
+      <div className="min-w-0">
+        <p className="text-xs text-slate-500">{label}</p>
+        {badge ? (
+          <span className={`inline-block px-2 py-0.5 text-sm font-semibold rounded-md border ${getBadgeStyle()}`}>
+            {value}
+          </span>
+        ) : (
+          <p className={`font-medium text-sm ${highlight ? 'text-emerald-600' : 'text-slate-900'}`}>{value}</p>
+        )}
       </div>
     </div>
   );
 }
+
 
 
