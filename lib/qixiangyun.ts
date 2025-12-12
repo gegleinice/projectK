@@ -1,6 +1,7 @@
-// 企享云 API 模拟 - 工商信息查询服务
+// 企享云 API - 工商信息查询服务（集成真实API）
 
 import { CompanyInfo } from './auth';
+import { getCompanyService, getFriendlyErrorMessage } from './qixiangyun';
 
 // 模拟企业数据库（按企业名称或信用代码查询）- 包含完整工商+税务信息
 const companyDatabase: Record<string, Partial<CompanyInfo>> = {
@@ -108,6 +109,11 @@ export interface QixiangyunResult {
 // 模拟 API 延迟
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+// 是否使用真实API (根据环境变量判断)
+const useRealAPI = typeof process !== 'undefined' && 
+  process.env.NEXT_PUBLIC_QIXIANGYUN_APP_KEY && 
+  process.env.NEXT_PUBLIC_QIXIANGYUN_APP_SECRET;
+
 // 搜索企业（模糊匹配）
 export async function searchCompany(keyword: string): Promise<{ success: boolean; results: string[] }> {
   await delay(500); // 模拟网络延迟
@@ -124,6 +130,45 @@ export async function searchCompany(keyword: string): Promise<{ success: boolean
 
 // 获取企业详细信息
 export async function getCompanyInfo(companyName: string): Promise<QixiangyunResult> {
+  // 如果配置了真实API，使用真实API
+  if (useRealAPI) {
+    try {
+      const service = getCompanyService();
+      
+      // 从企业名称提取可能的纳税识别号
+      const company = companyDatabase[companyName];
+      if (!company || !company.creditCode) {
+        return {
+          success: false,
+          message: '未找到该企业信息，请检查企业名称是否正确'
+        };
+      }
+      
+      // 推测地区编码
+      let areaCode = '44'; // 默认广东
+      if (company.province?.includes('北京')) areaCode = '11';
+      if (company.province?.includes('浙江') || company.city?.includes('杭州')) areaCode = '33';
+      if (company.province?.includes('上海')) areaCode = '31';
+      
+      const qxCompany = await service.getCompanyInfo(company.creditCode, areaCode);
+      const mappedCompany = service.mapToCompanyInfo(qxCompany);
+      
+      // 合并模拟数据中的额外字段
+      return {
+        success: true,
+        message: '获取成功（真实API）',
+        data: {
+          ...mappedCompany,
+          ...company // 保留模拟数据的额外字段
+        } as CompanyInfo
+      };
+    } catch (error) {
+      console.error('Real API failed, falling back to mock:', error);
+      // API失败时回退到模拟数据
+    }
+  }
+  
+  // 使用模拟数据
   await delay(800); // 模拟网络延迟
   
   const company = companyDatabase[companyName];

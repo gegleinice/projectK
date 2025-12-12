@@ -18,6 +18,10 @@ import {
 } from 'lucide-react';
 import { sendVerificationCode, verifyCode, loginOrRegister, saveUser, getCurrentUser, verifyRealName, UserCompanyRelation } from '@/lib/auth';
 import { bindCompany } from '@/lib/qixiangyun';
+import { NaturalPersonAuthFlow } from '@/lib/qixiangyun/natural-person';
+import { validatePhoneNumber, validatePassword } from '@/lib/qixiangyun/rsa-utils';
+import { AREA_CODES, DEFAULT_AREA_CODE, formatAreaCode } from '@/lib/qixiangyun/area-codes';
+import { Lock, Eye, EyeOff, MapPin, ChevronDown } from 'lucide-react';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -29,9 +33,20 @@ export default function LoginPage() {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   
-  // 实名认证相关
-  const [realName, setRealName] = useState('');
-  const [idCard, setIdCard] = useState('');
+  // 实名认证相关 - 办税人信息
+  const [realName, setRealName] = useState(''); // 办税人姓名
+  const [taxPayerPhone, setTaxPayerPhone] = useState(''); // 办税人手机号
+  const [taxPayerPassword, setTaxPayerPassword] = useState(''); // 税务APP密码
+  const [showPassword, setShowPassword] = useState(false);
+  const [selectedArea, setSelectedArea] = useState(DEFAULT_AREA_CODE); // 地区编码
+  const [showAreaDropdown, setShowAreaDropdown] = useState(false); // 地区下拉框显示
+  
+  // 税务短信验证相关
+  const [taxSmsCode, setTaxSmsCode] = useState(''); // 税务短信验证码
+  const [smsSent, setSmsSent] = useState(false); // 验证码是否已发送
+  const [smsCountdown, setSmsCountdown] = useState(0); // 发送按钮倒计时
+  const [taskId, setTaskId] = useState(''); // API返回的任务ID
+  const [sendingSms, setSendingSms] = useState(false); // 发送中状态
   
   // 名下企业列表
   const [relatedCompanies, setRelatedCompanies] = useState<UserCompanyRelation[]>([]);
@@ -48,13 +63,21 @@ export default function LoginPage() {
     }
   }, [router]);
 
-  // 倒计时
+  // 倒计时（系统登录验证码）
   useEffect(() => {
     if (countdown > 0) {
       const timer = setTimeout(() => setCountdown(countdown - 1), 1000);
       return () => clearTimeout(timer);
     }
   }, [countdown]);
+
+  // 倒计时（税务验证码）
+  useEffect(() => {
+    if (smsCountdown > 0) {
+      const timer = setTimeout(() => setSmsCountdown(smsCountdown - 1), 1000);
+      return () => clearTimeout(timer);
+    }
+  }, [smsCountdown]);
 
   // 发送验证码
   const handleSendCode = async () => {
@@ -114,6 +137,7 @@ export default function LoginPage() {
       } else {
         // 需要实名认证
         setStep('verify');
+        setMessage(''); // 清除登录时的消息
       }
     } catch {
       setError('登录失败，请稍后重试');
@@ -122,14 +146,84 @@ export default function LoginPage() {
     }
   };
 
-  // 实名认证
-  const handleVerifyRealName = async () => {
-    if (!realName || realName.length < 2) {
-      setError('请输入正确的姓名');
+  // 发送税务验证码
+  const handleSendTaxSms = async () => {
+    // 验证地区是否已选择
+    if (!selectedArea) {
+      setError('请先选择所在地区');
       return;
     }
-    if (!idCard || idCard.length < 15) {
-      setError('请输入正确的身份证号');
+    if (!validatePhoneNumber(taxPayerPhone)) {
+      setError('请输入正确的11位手机号');
+      return;
+    }
+    if (!validatePassword(taxPayerPassword)) {
+      setError('请先输入密码（至少6位）');
+      return;
+    }
+    
+    setSendingSms(true);
+    setError('');
+    
+    // 演示模式：手机号以178开头时直接模拟成功
+    if (taxPayerPhone.startsWith('178')) {
+      setSmsSent(true);
+      setSmsCountdown(60);
+      setTaskId('demo-task-id');
+      setSendingSms(false);
+      return;
+    }
+    
+    try {
+      // 导入并调用API，使用格式化后的地区代码
+      const { natureTpassLogin } = await import('@/lib/qixiangyun/natural-person');
+      const formattedAreaCode = formatAreaCode(selectedArea);
+      console.log('发送验证码 - 地区代码:', selectedArea, '->', formattedAreaCode);
+      const result = await natureTpassLogin(taxPayerPhone, taxPayerPassword, formattedAreaCode);
+      
+      if (result.status === 'error') {
+        setError(result.message || '发送验证码失败');
+        return;
+      }
+      
+      // 保存taskId
+      if (result.taskId) {
+        setTaskId(result.taskId);
+      }
+      
+      // 标记已发送，开始倒计时
+      setSmsSent(true);
+      setSmsCountdown(60);
+      
+    } catch (err: any) {
+      console.error('发送验证码失败:', err);
+      setError(err.message || '发送验证码失败，请稍后重试');
+    } finally {
+      setSendingSms(false);
+    }
+  };
+
+  // 实名认证
+  const handleVerifyRealName = async () => {
+    // 验证所有字段
+    if (!realName || realName.length < 2) {
+      setError('请输入办税人姓名');
+      return;
+    }
+    if (!validatePhoneNumber(taxPayerPhone)) {
+      setError('请输入正确的手机号');
+      return;
+    }
+    if (!validatePassword(taxPayerPassword)) {
+      setError('密码至少6位');
+      return;
+    }
+    if (!smsSent) {
+      setError('请先点击"发送"获取验证码');
+      return;
+    }
+    if (!taxSmsCode || taxSmsCode.length < 4) {
+      setError('请输入验证码');
       return;
     }
     
@@ -137,26 +231,72 @@ export default function LoginPage() {
     setError('');
     
     try {
-      const result = verifyRealName(realName, idCard);
-      
-      if (result.success && result.relatedCompanies) {
-        setRelatedCompanies(result.relatedCompanies);
-        
-        // 更新用户信息
-        if (tempUser) {
-          tempUser.verified = true;
-          tempUser.realName = realName;
-          tempUser.idCard = idCard.slice(0, 6) + '********' + idCard.slice(-4);
-          tempUser.relatedCompanies = result.relatedCompanies;
-        }
-        
-        setStep('companies');
+      // 演示模式
+      if (taxPayerPhone.startsWith('178') && taxSmsCode === '888888') {
+        // 模拟成功，返回演示企业
+        const demoCompanies = [
+          { nsrsbh: '91310000MA1FL8XQ30', nsrmc: '演示科技有限公司', sflx: 'BSY', glzt: '00', xh: 0 },
+          { nsrsbh: '91310115MA1K4LXE6P', nsrmc: '演示贸易有限公司', sflx: 'BSY', glzt: '00', xh: 1 }
+        ];
+        handleAuthSuccess(demoCompanies);
+        return;
       }
-    } catch {
-      setError('实名认证失败，请稍后重试');
+      
+      // 步骤1: 验证验证码
+      const { submitSmsCode, getZrrOrgList } = await import('@/lib/qixiangyun/natural-person');
+      
+      if (taskId) {
+        const smsResult = await submitSmsCode(taskId, taxSmsCode);
+        if (smsResult.status === 'error') {
+          setError(smsResult.message || '验证码错误');
+          return;
+        }
+      }
+      
+      // 步骤2: 获取企业列表（使用格式化后的地区代码）
+      const formattedAreaCode = formatAreaCode(selectedArea);
+      const companies = await getZrrOrgList(taxPayerPhone, taxPayerPassword, formattedAreaCode);
+      
+      if (companies.length === 0) {
+        setError('该办税人名下暂无可用企业');
+        return;
+      }
+      
+      handleAuthSuccess(companies);
+      
+    } catch (err: any) {
+      console.error('办税人认证失败:', err);
+      setError(err.message || '认证失败，请检查验证码是否正确');
     } finally {
       setLoading(false);
     }
+  };
+
+  // 处理认证成功
+  const handleAuthSuccess = (companies: any[]) => {
+    const mappedCompanies: UserCompanyRelation[] = companies.map(company => ({
+      name: company.nsrmc,
+      creditCode: company.nsrsbh,
+      role: company.sflx === 'BSY' ? '办税员' : company.sflx,
+      bindDate: new Date().toISOString().split('T')[0]
+    }));
+    
+    setRelatedCompanies(mappedCompanies);
+    
+    if (tempUser) {
+      tempUser.verified = true;
+      tempUser.realName = realName;
+      tempUser.idCard = '';
+      tempUser.relatedCompanies = mappedCompanies;
+    }
+    
+    setStep('companies');
+  };
+
+  // 获取选中地区的名称
+  const getSelectedAreaName = () => {
+    const area = AREA_CODES.find(a => a.value === selectedArea);
+    return area?.label || '请选择地区';
   };
 
   // 选择企业并绑定
@@ -300,8 +440,9 @@ export default function LoginPage() {
                 </div>
                 
                 <div className="space-y-4">
+                  {/* 办税人 */}
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-2">真实姓名</label>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">办税人</label>
                     <div className="relative">
                       <User className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
                       <input
@@ -314,26 +455,119 @@ export default function LoginPage() {
                       />
                     </div>
                   </div>
-                  
+
+                  {/* 所在地区 - 前置，发送验证码需要地区代码 */}
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-2">身份证号</label>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">所在地区</label>
                     <div className="relative">
-                      <CreditCard className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                      <input
-                        type="text"
-                        value={idCard}
-                        onChange={(e) => { setIdCard(e.target.value.replace(/[^\dXx]/g, '').slice(0, 18)); setError(''); }}
-                        placeholder="请输入身份证号"
-                        className="w-full pl-12 pr-4 py-4 bg-slate-50 border-0 rounded-xl text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all"
-                      />
+                      <MapPin className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400 z-10" />
+                      <button
+                        type="button"
+                        onClick={() => setShowAreaDropdown(!showAreaDropdown)}
+                        className="w-full pl-12 pr-12 py-4 bg-slate-50 border-2 border-blue-200 rounded-xl text-slate-900 text-left focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all"
+                      >
+                        {getSelectedAreaName()}
+                      </button>
+                      <ChevronDown className={`absolute right-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400 transition-transform ${showAreaDropdown ? 'rotate-180' : ''}`} />
+                      
+                      {showAreaDropdown && (
+                        <div className="absolute z-20 w-full mt-2 bg-white rounded-xl shadow-xl border border-slate-200 max-h-60 overflow-y-auto">
+                          {AREA_CODES.map((area) => (
+                            <button
+                              key={area.value}
+                              type="button"
+                              onClick={() => { setSelectedArea(area.value); setShowAreaDropdown(false); setSmsSent(false); }}
+                              className={`w-full px-4 py-3 text-left hover:bg-blue-50 transition-colors flex items-center justify-between ${selectedArea === area.value ? 'bg-blue-50 text-blue-600' : 'text-slate-700'}`}
+                            >
+                              <span>{area.label}</span>
+                              {area.isCity && <span className="text-xs text-slate-400">计划单列市</span>}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <p className="mt-1 text-xs text-slate-500">💡 请先选择地区，发送验证码需要地区信息</p>
+                  </div>
+                  
+                  {/* 办税人手机号 + 发送按钮 */}
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">办税人手机号</label>
+                    <div className="relative flex space-x-2">
+                      <div className="relative flex-1">
+                        <Phone className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                        <input
+                          type="tel"
+                          value={taxPayerPhone}
+                          onChange={(e) => { setTaxPayerPhone(e.target.value.replace(/\D/g, '').slice(0, 11)); setError(''); setSmsSent(false); }}
+                          placeholder="请输入手机号"
+                          className="w-full pl-12 pr-4 py-4 bg-slate-50 border-2 border-slate-200 rounded-xl text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white transition-all"
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleSendTaxSms}
+                        disabled={sendingSms || smsCountdown > 0 || taxPayerPhone.length !== 11 || taxPayerPassword.length < 6}
+                        className="px-5 py-4 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 disabled:bg-slate-300 disabled:text-slate-500 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
+                      >
+                        {sendingSms ? <Loader2 className="w-5 h-5 animate-spin" /> : smsCountdown > 0 ? `${smsCountdown}s` : '发送'}
+                      </button>
                     </div>
                   </div>
                   
+                  {/* 办税人密码(税务APP) */}
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">办税人密码（税务APP）</label>
+                    <div className="relative">
+                      <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                      <input
+                        type={showPassword ? 'text' : 'password'}
+                        value={taxPayerPassword}
+                        onChange={(e) => { setTaxPayerPassword(e.target.value); setError(''); setSmsSent(false); }}
+                        placeholder="请输入密码"
+                        className="w-full pl-12 pr-12 py-4 bg-slate-50 border-2 border-slate-200 rounded-xl text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white transition-all"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors"
+                      >
+                        {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 验证码输入框 */}
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                      验证码
+                      {smsSent && <span className="ml-2 text-emerald-600 text-xs">已发送到 {taxPayerPhone.slice(0, 3)}****{taxPayerPhone.slice(-4)}</span>}
+                    </label>
+                    <div className="relative">
+                      <Shield className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                      <input
+                        type="text"
+                        value={taxSmsCode}
+                        onChange={(e) => { setTaxSmsCode(e.target.value.replace(/\D/g, '').slice(0, 6)); setError(''); }}
+                        placeholder={smsSent ? "请输入验证码" : "请先点击发送获取验证码"}
+                        disabled={!smsSent}
+                        className={`w-full pl-12 pr-4 py-4 border-2 rounded-xl text-slate-900 placeholder-slate-400 transition-all ${
+                          smsSent 
+                            ? 'bg-slate-50 border-slate-200 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white' 
+                            : 'bg-slate-100 border-slate-200 cursor-not-allowed'
+                        }`}
+                        maxLength={6}
+                      />
+                    </div>
+                    {smsSent && (
+                      <p className="mt-1 text-xs text-slate-500">💡 演示模式：输入 888888 即可通过验证</p>
+                    )}
+                  </div>
+
                   {error && <p className="text-red-500 text-sm text-center">{error}</p>}
                   
                   <button
                     onClick={handleVerifyRealName}
-                    disabled={loading || realName.length < 2 || idCard.length < 15}
+                    disabled={loading || realName.length < 2 || !validatePhoneNumber(taxPayerPhone) || !validatePassword(taxPayerPassword) || !smsSent || taxSmsCode.length < 4}
                     className="w-full py-4 bg-gradient-to-r from-blue-600 to-cyan-500 text-white rounded-xl font-semibold text-lg hover:from-blue-700 hover:to-cyan-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center space-x-2 shadow-lg shadow-blue-500/30"
                   >
                     {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <><span>认证并查询名下企业</span><ArrowRight className="w-5 h-5" /></>}

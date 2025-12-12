@@ -1,0 +1,17 @@
+#!/bin/bash
+echo "🔄 强制刷新开发服务器..."
+echo ""
+echo "方法1: 硬刷新浏览器"
+echo "  • Mac: Cmd + Shift + R"
+echo "  • Windows: Ctrl + Shift + R"
+echo ""
+echo "方法2: 清除.next缓存"
+rm -rf .next
+echo "✅ .next缓存已清除"
+echo ""
+echo "方法3: 重启开发服务器"
+echo "  请在终端中按 Ctrl+C 停止当前服务器"
+echo "  然后重新运行: npm run dev"
+echo ""
+echo "📌 当前页面路径: /user/bindcompany"
+echo "🌐 访问地址: http://localhost:3008/user/bindcompany"

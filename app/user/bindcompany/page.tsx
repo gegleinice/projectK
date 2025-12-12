@@ -16,24 +16,36 @@ import {
   Shield,
   FileText,
   ChevronRight,
-  AlertCircle
+  AlertCircle,
+  Phone,
+  Lock,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import { getCurrentUser, updateUser, User as UserType, CompanyInfo } from '@/lib/auth';
-import { searchCompany, bindCompany, inferInvoiceLocation, getRecommendedTaxRate } from '@/lib/qixiangyun';
+import { bindCompany, inferInvoiceLocation, getRecommendedTaxRate } from '@/lib/qixiangyun';
+import { queryNaturalPersonCompanies } from '@/lib/qixiangyun/natural-person';
+import { validatePhoneNumber, validatePassword } from '@/lib/qixiangyun/rsa-utils';
+import type { NaturalPersonCompany } from '@/lib/qixiangyun/types';
 
 export default function BindCompanyPage() {
   const router = useRouter();
   const [user, setUser] = useState<UserType | null>(null);
-  const [step, setStep] = useState<'search' | 'preview' | 'complete'>('search');
+  const [step, setStep] = useState<'auth' | 'selectCompany' | 'preview' | 'complete'>('auth');
   
-  // 搜索相关
-  const [keyword, setKeyword] = useState('');
-  const [searching, setSearching] = useState(false);
-  const [searchResults, setSearchResults] = useState<string[]>([]);
-  const [showResults, setShowResults] = useState(false);
+  // 办税人认证相关
+  const [taxPayerName, setTaxPayerName] = useState('');
+  const [phoneNumber, setPhoneNumber] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [authenticating, setAuthenticating] = useState(false);
+  const [authError, setAuthError] = useState('');
   
-  // 企业信息
-  const [selectedCompany, setSelectedCompany] = useState('');
+  // 企业列表
+  const [companies, setCompanies] = useState<NaturalPersonCompany[]>([]);
+  const [selectedCompanyId, setSelectedCompanyId] = useState('');
+  
+  // 企业详情
   const [companyInfo, setCompanyInfo] = useState<CompanyInfo | null>(null);
   const [loading, setLoading] = useState(false);
   const [invoiceLocation, setInvoiceLocation] = useState<ReturnType<typeof inferInvoiceLocation> | null>(null);
@@ -53,35 +65,54 @@ export default function BindCompanyPage() {
     setUser(currentUser);
   }, [router]);
 
-  // 搜索企业
-  const handleSearch = async (value: string) => {
-    setKeyword(value);
-    if (value.length < 2) {
-      setSearchResults([]);
-      setShowResults(false);
+  // 办税人认证并获取企业列表
+  const handleAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError('');
+    
+    // 表单验证
+    if (!taxPayerName.trim()) {
+      setAuthError('请输入办税人姓名');
+      return;
+    }
+    if (!validatePhoneNumber(phoneNumber)) {
+      setAuthError('请输入正确的手机号');
+      return;
+    }
+    if (!validatePassword(password)) {
+      setAuthError('密码至少6位');
       return;
     }
     
-    setSearching(true);
+    setAuthenticating(true);
+    
     try {
-      const result = await searchCompany(value);
-      setSearchResults(result.results);
-      setShowResults(result.results.length > 0);
-    } catch {
-      console.error('搜索失败');
+      const companyList = await queryNaturalPersonCompanies(phoneNumber, password);
+      
+      if (companyList.length === 0) {
+        setAuthError('该办税人名下暂无可用企业');
+        return;
+      }
+      
+      setCompanies(companyList);
+      setStep('selectCompany');
+    } catch (error: any) {
+      setAuthError(error.message || '认证失败，请检查手机号和密码');
     } finally {
-      setSearching(false);
+      setAuthenticating(false);
     }
   };
 
   // 选择企业并获取详情
-  const handleSelectCompany = async (companyName: string) => {
-    setSelectedCompany(companyName);
-    setShowResults(false);
+  const handleSelectCompany = async (companyId: string) => {
+    setSelectedCompanyId(companyId);
     setLoading(true);
     
     try {
-      const result = await bindCompany(companyName);
+      const selected = companies.find(c => c.nsrsbh === companyId);
+      if (!selected) return;
+      
+      const result = await bindCompany(selected.nsrmc);
       
       if (result.success && result.companyInfo) {
         setCompanyInfo(result.companyInfo);
@@ -100,8 +131,9 @@ export default function BindCompanyPage() {
         
         setStep('preview');
       }
-    } catch {
-      console.error('获取企业信息失败');
+    } catch (error) {
+      console.error('获取企业信息失败:', error);
+      alert('获取企业信息失败，请重试');
     } finally {
       setLoading(false);
     }
@@ -127,15 +159,6 @@ export default function BindCompanyPage() {
     }, 2000);
   };
 
-  // 快速选择示例企业
-  const sampleCompanies = [
-    '深圳市智慧科技有限公司',
-    '杭州云端网络科技有限公司',
-    '上海智联贸易有限公司',
-    '北京创新医疗科技有限公司',
-    '广州美食餐饮管理有限公司'
-  ];
-
   if (!user) return null;
 
   return (
@@ -153,102 +176,195 @@ export default function BindCompanyPage() {
             <span className="w-6 h-6 bg-blue-100 rounded-full flex items-center justify-center text-blue-600 text-xs font-bold">1</span>
             <span>登录</span>
             <ChevronRight className="w-4 h-4" />
-            <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${step !== 'search' ? 'bg-blue-100 text-blue-600' : 'bg-blue-600 text-white'}`}>2</span>
-            <span className={step !== 'search' ? 'text-slate-500' : 'text-blue-600 font-medium'}>绑定企业</span>
+            <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${
+              step === 'auth' ? 'bg-blue-600 text-white' : 'bg-blue-100 text-blue-600'
+            }`}>2</span>
+            <span className={step === 'auth' ? 'text-blue-600 font-medium' : 'text-slate-500'}>办税人认证</span>
             <ChevronRight className="w-4 h-4" />
-            <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${step === 'complete' ? 'bg-emerald-100 text-emerald-600' : 'bg-slate-100 text-slate-400'}`}>3</span>
+            <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${
+              step === 'complete' ? 'bg-emerald-100 text-emerald-600' : 'bg-slate-100 text-slate-400'
+            }`}>3</span>
             <span className={step === 'complete' ? 'text-emerald-600 font-medium' : 'text-slate-400'}>完成</span>
           </div>
         </div>
       </header>
 
       <main className="max-w-4xl mx-auto px-6 py-12">
-        {step === 'search' && (
+        {step === 'auth' && (
           <div className="space-y-8">
             {/* 标题区域 */}
             <div className="text-center">
               <div className="w-20 h-20 bg-gradient-to-br from-blue-100 to-cyan-100 rounded-2xl flex items-center justify-center mx-auto mb-6">
-                <Building2 className="w-10 h-10 text-blue-600" />
+                <User className="w-10 h-10 text-blue-600" />
               </div>
-              <h1 className="text-3xl font-bold text-slate-900 mb-3">绑定您的企业</h1>
+              <h1 className="text-3xl font-bold text-slate-900 mb-3">自然人认证</h1>
               <p className="text-slate-500 max-w-md mx-auto">
-                通过企享云自动获取工商信息，智能推荐开票方案，让开票更高效
+                完成实名认证后自动带出您名下的企业
               </p>
             </div>
 
-            {/* 搜索框 */}
-            <div className="max-w-xl mx-auto">
-              <div className="relative">
-                <Search className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                <input
-                  type="text"
-                  value={keyword}
-                  onChange={(e) => handleSearch(e.target.value)}
-                  onFocus={() => searchResults.length > 0 && setShowResults(true)}
-                  placeholder="搜索企业名称或统一社会信用代码"
-                  className="w-full pl-14 pr-14 py-5 bg-white border border-slate-200 rounded-2xl text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-lg shadow-sm"
-                />
-                {searching && (
-                  <Loader2 className="absolute right-5 top-1/2 -translate-y-1/2 w-5 h-5 text-blue-600 animate-spin" />
-                )}
+            {/* 认证表单 */}
+            <form onSubmit={handleAuth} className="max-w-md mx-auto space-y-6">
+              {/* 办税人 */}
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-2">
+                  办税人<span className="text-red-500">*</span>
+                </label>
+                <div className="relative">
+                  <User className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                  <input
+                    type="text"
+                    value={taxPayerName}
+                    onChange={(e) => setTaxPayerName(e.target.value)}
+                    placeholder="请输入真实姓名"
+                    className="w-full pl-12 pr-4 py-4 bg-white border-2 border-slate-200 rounded-xl text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                  />
+                </div>
               </div>
 
-              {/* 搜索结果 */}
-              {showResults && (
-                <div className="absolute left-0 right-0 mt-2 bg-white border border-slate-200 rounded-2xl shadow-xl z-50 overflow-hidden max-w-xl mx-auto">
-                  <div className="px-4 py-3 bg-slate-50 border-b border-slate-100 flex items-center space-x-2">
-                    <Sparkles className="w-4 h-4 text-blue-600" />
-                    <span className="text-sm font-medium text-slate-700">企享云智能匹配</span>
-                  </div>
-                  {searchResults.map((name) => (
-                    <button
-                      key={name}
-                      onClick={() => handleSelectCompany(name)}
-                      className="w-full px-5 py-4 text-left hover:bg-blue-50 transition-colors flex items-center justify-between group"
-                    >
-                      <div className="flex items-center space-x-3">
-                        <Building2 className="w-5 h-5 text-slate-400" />
-                        <span className="text-slate-900 font-medium">{name}</span>
-                      </div>
-                      <ArrowRight className="w-4 h-4 text-slate-300 group-hover:text-blue-600 group-hover:translate-x-1 transition-all" />
-                    </button>
-                  ))}
+              {/* 办税人手机号 */}
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-2">
+                  办税人手机号<span className="text-red-500">*</span>
+                </label>
+                <div className="relative">
+                  <Phone className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                  <input
+                    type="tel"
+                    value={phoneNumber}
+                    onChange={(e) => setPhoneNumber(e.target.value)}
+                    placeholder="请输入手机号"
+                    className="w-full pl-12 pr-4 py-4 bg-white border-2 border-slate-200 rounded-xl text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                  />
+                </div>
+              </div>
+
+              {/* 办税人密码(税务APP) */}
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-2">
+                  办税人密码（税务APP）<span className="text-red-500">*</span>
+                </label>
+                <div className="relative">
+                  <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="请输入密码"
+                    className="w-full pl-12 pr-12 py-4 bg-white border-2 border-slate-200 rounded-xl text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors"
+                  >
+                    {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                  </button>
+                </div>
+              </div>
+
+              {/* 错误提示 */}
+              {authError && (
+                <div className="p-4 bg-red-50 border border-red-200 rounded-xl flex items-start space-x-3">
+                  <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
+                  <p className="text-sm text-red-700">{authError}</p>
                 </div>
               )}
-            </div>
 
-            {/* 快速选择 */}
-            <div className="max-w-xl mx-auto">
-              <p className="text-sm text-slate-500 mb-4 text-center">💡 演示企业（点击快速体验）</p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {sampleCompanies.map((name) => (
-                  <button
-                    key={name}
-                    onClick={() => handleSelectCompany(name)}
-                    disabled={loading}
-                    className="px-4 py-3 bg-white border border-slate-200 rounded-xl text-left hover:border-blue-300 hover:bg-blue-50/50 transition-all text-sm text-slate-700 hover:text-blue-700 disabled:opacity-50"
-                  >
-                    {name}
-                  </button>
-                ))}
+              {/* 提交按钮 */}
+              <button
+                type="submit"
+                disabled={authenticating}
+                className="w-full py-4 bg-gradient-to-r from-blue-600 to-cyan-500 text-white rounded-xl font-semibold hover:from-blue-700 hover:to-cyan-600 transition-all flex items-center justify-center space-x-2 shadow-lg shadow-blue-500/30 disabled:opacity-50"
+              >
+                {authenticating ? (
+                  <>
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    <span>认证中...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>认证并查询名下企业</span>
+                    <ArrowRight className="w-5 h-5" />
+                  </>
+                )}
+              </button>
+            </form>
+
+            {/* 安全说明 */}
+            <div className="max-w-md mx-auto p-4 bg-blue-50 rounded-xl border border-blue-100">
+              <div className="flex items-start space-x-3">
+                <Shield className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
+                <div className="text-sm text-blue-800">
+                  <p className="font-semibold mb-1">🔒 您的信息将通过税务系统安全认证</p>
+                  <p className="text-blue-600">仅用于查询关联企业，不会泄露或存储</p>
+                </div>
               </div>
             </div>
+          </div>
+        )}
 
-            {/* 功能说明 */}
-            <div className="max-w-xl mx-auto grid grid-cols-3 gap-4 mt-12">
-              {[
-                { icon: <Building2 className="w-5 h-5" />, title: '工商信息', desc: '自动获取' },
-                { icon: <MapPin className="w-5 h-5" />, title: '开票地址', desc: '智能推荐' },
-                { icon: <Shield className="w-5 h-5" />, title: '税率方案', desc: '行业匹配' },
-              ].map((item, i) => (
-                <div key={i} className="text-center p-4 bg-white rounded-xl border border-slate-100">
-                  <div className="w-10 h-10 bg-blue-50 rounded-xl flex items-center justify-center mx-auto mb-3 text-blue-600">
-                    {item.icon}
+        {step === 'selectCompany' && companies.length > 0 && (
+          <div className="space-y-8">
+            {/* 标题区域 */}
+            <div className="text-center">
+              <div className="w-20 h-20 bg-gradient-to-br from-emerald-100 to-green-100 rounded-2xl flex items-center justify-center mx-auto mb-6">
+                <Building2 className="w-10 h-10 text-emerald-600" />
+              </div>
+              <h1 className="text-3xl font-bold text-slate-900 mb-3">选择企业</h1>
+              <p className="text-slate-500 max-w-md mx-auto">
+                找到 {companies.length} 家企业，请选择要绑定的企业
+              </p>
+            </div>
+
+            {/* 企业列表 */}
+            <div className="max-w-2xl mx-auto space-y-3">
+              {companies.map((company) => (
+                <button
+                  key={company.nsrsbh}
+                  onClick={() => handleSelectCompany(company.nsrsbh)}
+                  disabled={loading}
+                  className="w-full p-6 bg-white border-2 border-slate-200 rounded-xl text-left hover:border-blue-400 hover:bg-blue-50/50 transition-all group disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex-1">
+                      <div className="flex items-center space-x-3 mb-2">
+                        <div className="w-12 h-12 bg-gradient-to-br from-blue-100 to-cyan-100 rounded-xl flex items-center justify-center text-blue-600 font-bold text-lg">
+                          {company.nsrmc.substring(0, 2)}
+                        </div>
+                        <div>
+                          <h3 className="text-lg font-bold text-slate-900 group-hover:text-blue-600 transition-colors">
+                            {company.nsrmc}
+                          </h3>
+                          <p className="text-sm text-slate-500 mt-0.5">
+                            {company.nsrsbh}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center space-x-4 mt-3 text-sm">
+                        <span className="px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full font-medium">
+                          {company.sflx === 'BSY' ? '办税员' : company.sflx}
+                        </span>
+                        <span className="px-3 py-1 bg-blue-100 text-blue-700 rounded-full font-medium">
+                          {company.glzt === '00' ? '已启用' : '未启用'}
+                        </span>
+                      </div>
+                    </div>
+                    <ArrowRight className="w-6 h-6 text-slate-300 group-hover:text-blue-600 group-hover:translate-x-1 transition-all flex-shrink-0" />
                   </div>
-                  <div className="text-sm font-semibold text-slate-900">{item.title}</div>
-                  <div className="text-xs text-slate-500 mt-1">{item.desc}</div>
-                </div>
+                </button>
               ))}
+            </div>
+
+            {/* 返回按钮 */}
+            <div className="flex justify-center">
+              <button
+                onClick={() => setStep('auth')}
+                disabled={loading}
+                className="px-6 py-3 text-slate-600 hover:text-slate-900 font-medium transition-colors disabled:opacity-50"
+              >
+                ← 重新认证
+              </button>
             </div>
           </div>
         )}
@@ -397,7 +513,7 @@ export default function BindCompanyPage() {
             {/* 操作按钮 */}
             <div className="flex items-center justify-between pt-4">
               <button
-                onClick={() => setStep('search')}
+                onClick={() => setStep('selectCompany')}
                 className="px-6 py-3 text-slate-600 hover:text-slate-900 font-medium transition-colors"
               >
                 ← 重新选择

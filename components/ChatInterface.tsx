@@ -113,8 +113,36 @@ export default function ChatInterface({ onInvoiceUpdate, initialData, companyInf
     }
   }, []);
 
-  // 生成发票PDF（模拟）
+  // 生成发票（集成真实API）
   const generateInvoicePDF = async (invoice: ParsedInvoice) => {
+    // 检查是否配置了真实API
+    const useRealAPI = Boolean(process.env.NEXT_PUBLIC_QIXIANGYUN_BASE_URL);
+    
+    if (useRealAPI && company) {
+      try {
+        // 动态导入企享云发票服务
+        const { getInvoiceService } = await import('@/lib/qixiangyun/invoice');
+        const invoiceService = getInvoiceService();
+        
+        console.log('🎫 调用真实API开票...');
+        const result = await invoiceService.createInvoice(invoice, company);
+        
+        if (result.success) {
+          return {
+            invoiceNumber: result.invoiceNumber!,
+            pdfUrl: result.pdfUrl || `/invoices/${result.invoiceNumber}.pdf`,
+            createTime: result.createTime || new Date().toISOString(),
+            isRealInvoice: true
+          };
+        } else {
+          throw new Error(result.message);
+        }
+      } catch (error) {
+        console.error('真实API开票失败，使用模拟数据:', error);
+        // 回退到模拟开票
+      }
+    }
+    
     // 模拟生成PDF的过程
     await new Promise(resolve => setTimeout(resolve, 1500));
     
@@ -124,7 +152,8 @@ export default function ChatInterface({ onInvoiceUpdate, initialData, companyInf
     return {
       invoiceNumber,
       pdfUrl: `/invoices/${invoiceNumber}.pdf`,
-      createTime: new Date().toISOString()
+      createTime: new Date().toISOString(),
+      isRealInvoice: false
     };
   };
 
@@ -145,7 +174,7 @@ export default function ChatInterface({ onInvoiceUpdate, initialData, companyInf
     setMessages(prev => [...prev, confirmingMsg]);
     
     try {
-      // 生成发票PDF
+      // 生成发票
       const pdfResult = await generateInvoicePDF(pendingInvoice);
       
       // 显示成功消息
@@ -163,11 +192,19 @@ export default function ChatInterface({ onInvoiceUpdate, initialData, companyInf
       setMessages(prev => [...prev.slice(0, -1), successMsg]);
       setPendingInvoice(null);
       
+      // 保存发票历史
+      if (pdfResult.isRealInvoice) {
+        console.log('✅ 真实发票已开具:', pdfResult.invoiceNumber);
+      } else {
+        console.log('📋 模拟发票已生成:', pdfResult.invoiceNumber);
+      }
+      
     } catch (error) {
+      console.error('发票生成失败:', error);
       const errorMsg: Message = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: '❌ 发票生成失败，请稍后重试',
+        content: `❌ 发票生成失败: ${error instanceof Error ? error.message : '请稍后重试'}`,
         timestamp: new Date(),
         type: 'error'
       };

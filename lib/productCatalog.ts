@@ -304,7 +304,61 @@ function projectToProduct(project: ProjectItem): Product {
  * @param limit 返回结果数量限制
  * @returns 匹配的商品列表（用户维护的项目优先）
  */
-export function searchProducts(query: string, limit: number = 5): Product[] {
+export async function searchProducts(query: string, limit: number = 5): Promise<Product[]> {
+  // 尝试使用真实API
+  if (typeof process !== 'undefined' && 
+      process.env.NEXT_PUBLIC_QIXIANGYUN_APP_KEY && 
+      process.env.NEXT_PUBLIC_QIXIANGYUN_APP_SECRET) {
+    try {
+      const { getQixiangyunService } = await import('./qixiangyunService');
+      const service = getQixiangyunService();
+      
+      // 这里需要获取当前用户的企业信息
+      // 简化处理：从localStorage获取
+      if (typeof window !== 'undefined') {
+        const userStr = localStorage.getItem('ai_invoice_user');
+        if (userStr) {
+          const user = JSON.parse(userStr);
+          if (user.company && user.company.creditCode) {
+            let areaCode = '11'; // 默认北京
+            if (user.company.province?.includes('广东')) areaCode = '44';
+            if (user.company.province?.includes('浙江')) areaCode = '33';
+            if (user.company.province?.includes('上海')) areaCode = '31';
+            
+            const products = await service.queryProducts(
+              user.company.creditCode,
+              areaCode,
+              query
+            );
+            
+            // 转换为本地格式
+            return products.slice(0, limit).map(p => ({
+              id: p.id || p.spbm || '',
+              name: p.spmc,
+              category: '现代服务', // 简化处理
+              specification: p.ggxh,
+              unit: p.jldw || '项',
+              unitPrice: p.dj || 0,
+              taxRate: p.sl || 6,
+              keywords: [p.spmc],
+              isUserDefined: false
+            }));
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Real API search failed, falling back to local:', error);
+    }
+  }
+  
+  // 回退到本地搜索
+  return searchProductsLocal(query, limit);
+}
+
+/**
+ * 本地搜索商品 (原有逻辑)
+ */
+function searchProductsLocal(query: string, limit: number = 5): Product[] {
   // 空查询时返回全部商品（用户项目优先）
   if (!query || query.trim().length === 0) {
     const allProducts: Product[] = [];
