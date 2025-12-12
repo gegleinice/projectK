@@ -141,3 +141,4 @@ export function clearAllHistory(): void {
   localStorage.removeItem(PRODUCT_HISTORY_KEY);
 }
 
+
